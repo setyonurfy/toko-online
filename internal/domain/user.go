@@ -15,8 +15,10 @@ type User struct {
 }
 
 var (
-	ErrUserNotFound     = errors.New("user tidak ditemukan")
-	ErrEmailAlreadyUsed = errors.New("email sudah terdaftar")
+	ErrUserNotFound       = errors.New("user tidak ditemukan")
+	ErrEmailAlreadyUsed   = errors.New("email sudah terdaftar")
+	ErrInvalidInput       = errors.New("input tidak valid")
+	ErrInvalidCredentials = errors.New("email atau password salah")
 )
 
 type UserRepository interface {
