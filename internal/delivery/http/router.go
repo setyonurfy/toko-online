@@ -2,11 +2,11 @@ package handler
 
 import "net/http"
 
-func NewRouter(auth *AuthHandler, tokens TokenParser) http.Handler {
+func NewRouter(auth *AuthHandler, tokens TokenParser, authLimiter *RateLimiter) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
-	mux.HandleFunc("/auth/register", auth.Register)
-	mux.HandleFunc("/auth/login", auth.Login)
+	mux.Handle("/auth/register", authLimiter.Middleware(http.HandlerFunc(auth.Register)))
+	mux.Handle("/auth/login", authLimiter.Middleware(http.HandlerFunc(auth.Login)))
 	mux.Handle("/me", Authenticate(tokens, http.HandlerFunc(auth.Me)))
 	return mux
 }

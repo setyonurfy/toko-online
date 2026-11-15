@@ -26,6 +26,11 @@ func main() {
 	defer db.Close()
 	log.Println("database terhubung")
 
+	authLimiter := handler.NewRateLimiter(10, 5) // 10 per menit, burst 5
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	authLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
+
 	userRepo := repository.NewUserPostgres(db)
 	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
 	authUsecase := usecase.NewAuthUsecase(userRepo, tokens)
@@ -33,7 +38,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           handler.NewRouter(authHandler, tokens),
+		Handler:           handler.NewRouter(authHandler, tokens, authLimiter),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

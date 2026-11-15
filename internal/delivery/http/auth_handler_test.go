@@ -147,3 +147,15 @@ func TestLoginHandler(t *testing.T) {
 		})
 	}
 }
+func TestRegisterHandler_BodyTerlaluBesar(t *testing.T) {
+	body := `{"nama":"` + strings.Repeat("a", 20000) + `"}`
+	h := NewAuthHandler(&fakeAuth{})
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.Register(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, ingin 413", rec.Code)
+	}
+}

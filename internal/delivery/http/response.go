@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 )
@@ -24,11 +25,17 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // maks 1mb
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<14) // 16 KB
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
+
 	if err := dec.Decode(dst); err != nil {
-		// log.Printf("decode json gagal: %v", err)
+		var terlaluBesar *http.MaxBytesError
+		if errors.As(err, &terlaluBesar) {
+			writeError(w, http.StatusRequestEntityTooLarge, "body terlalu besar")
+			return false
+		}
+		log.Printf("decode json gagal: %v", err)
 		writeError(w, http.StatusBadRequest, "body JSON tidak valid")
 		return false
 	}

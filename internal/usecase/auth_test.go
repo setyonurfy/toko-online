@@ -17,7 +17,7 @@ func (fakeTokens) Generate(userID int64) (string, error) {
 
 func newTestUsecase() *AuthUsecase {
 	uc := NewAuthUsecase(newMockRepo(), fakeTokens{})
-	uc.cost = bcrypt.MinCost
+	uc.setCost(bcrypt.MinCost)
 	return uc
 }
 
@@ -150,5 +150,24 @@ func TestLogin(t *testing.T) {
 
 			}
 		})
+	}
+}
+
+func TestLogin_EmailTidakAda_TetapMenjalankanBcrypt(t *testing.T) {
+	uc := newTestUsecase()
+
+	panggilan := 0
+	uc.compare = func(hashed, password []byte) error {
+		panggilan++
+		return bcrypt.CompareHashAndPassword(hashed, password)
+	}
+
+	_, err := uc.Login(context.Background(), "tidak-ada@mail.com", "apa-saja")
+
+	if !errors.Is(err, domain.ErrInvalidCredentials) {
+		t.Fatalf("error = %v, ingin %v", err, domain.ErrInvalidCredentials)
+	}
+	if panggilan != 1 {
+		t.Errorf("bcrypt dijalankan %d kali, ingin 1 (agar waktu respons tidak membocorkan email)", panggilan)
 	}
 }
