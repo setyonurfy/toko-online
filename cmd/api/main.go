@@ -38,7 +38,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           handler.NewRouter(authHandler, tokens, authLimiter),
+		Handler:           handler.NewRouter(authHandler, tokens, authUsecase, authLimiter),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

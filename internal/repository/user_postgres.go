@@ -22,9 +22,9 @@ func (r *userPostgres) Create(ctx context.Context, u *domain.User) error {
 	const q = `
 	INSERT INTO users (nama, email, password_hash)
 	VALUES ($1, $2, $3)
-	RETURNING id, created_at`
+	RETURNING id, role, created_at`
 
-	err := r.db.QueryRowContext(ctx, q, u.Nama, u.Email, u.PasswordHash).Scan(&u.ID, &u.CreatedAt)
+	err := r.db.QueryRowContext(ctx, q, u.Nama, u.Email, u.PasswordHash).Scan(&u.ID, &u.Role, &u.CreatedAt)
 	if err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
@@ -37,11 +37,11 @@ func (r *userPostgres) Create(ctx context.Context, u *domain.User) error {
 
 func (r *userPostgres) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	const q = `
-	SELECT id, nama, email, password_hash, created_at
+	SELECT id, nama, email, password_hash, role, created_at
 	FROM users WHERE email = $1`
 
 	var u domain.User
-	err := r.db.QueryRowContext(ctx, q, email).Scan(&u.ID, &u.Nama, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	err := r.db.QueryRowContext(ctx, q, email).Scan(&u.ID, &u.Nama, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, domain.ErrUserNotFound
@@ -54,12 +54,11 @@ func (r *userPostgres) GetByEmail(ctx context.Context, email string) (*domain.Us
 
 func (r *userPostgres) GetById(ctx context.Context, id int64) (*domain.User, error) {
 	const q = `
-		SELECT id, nama, email, password_hash, created_at
+		SELECT id, nama, email, password_hash, role, created_at
 		FROM users WHERE id = $1`
 
 	var u domain.User
-	err := r.db.QueryRowContext(ctx, q, id).
-		Scan(&u.ID, &u.Nama, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	err := r.db.QueryRowContext(ctx, q, id).Scan(&u.ID, &u.Nama, &u.Email, &u.PasswordHash, &u.Role, &u.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, domain.ErrUserNotFound

@@ -38,6 +38,7 @@ func (m *mockUserRepo) Create(ctx context.Context, u *domain.User) error {
 	}
 	m.nextID++
 	u.ID = m.nextID
+	u.Role = domain.RoleCustomer
 	salinan := *u
 	m.byEmail[u.Email] = &salinan
 	return nil
@@ -94,6 +95,9 @@ func TestRegister(t *testing.T) {
 			}
 			if u.PasswordHash == tt.password {
 				t.Error("password tidak boleh disimpan")
+			}
+			if u.Role != domain.RoleCustomer {
+				t.Errorf("role = %q, must be %q", u.Role, domain.RoleCustomer)
 			}
 		})
 	}

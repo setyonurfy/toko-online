@@ -50,7 +50,7 @@ func (f fakeParser) Parse(token string) (int64, error) { return f.id, f.err }
 
 func TestRouter_MeButuhToken(t *testing.T) {
 	svc := &fakeAuth{user: &domain.User{ID: 7, Nama: "Siti", Email: "siti@mail.com"}}
-	router := NewRouter(NewAuthHandler(svc), fakeParser{id: 7}, NewRateLimiter(6000, 1000))
+	router := NewRouter(NewAuthHandler(svc), fakeParser{id: 7}, svc, NewRateLimiter(6000, 1000))
 
 	t.Run("tanpa token ditolak", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/me", nil)
@@ -81,7 +81,7 @@ func TestRouter_MeButuhToken(t *testing.T) {
 
 func TestRouter_LoginSampaiKeHandler(t *testing.T) {
 	svc := &fakeAuth{user: &domain.User{ID: 7, Email: "siti@mail.com"}}
-	router := NewRouter(NewAuthHandler(svc), fakeParser{}, NewRateLimiter(6000, 1000))
+	router := NewRouter(NewAuthHandler(svc), fakeParser{id: 7}, svc, NewRateLimiter(6000, 1000))
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/login",
 		strings.NewReader(`{"email":"siti@mail.com","password":"rahasia123"}`))

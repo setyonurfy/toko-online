@@ -2,8 +2,11 @@ package handler
 
 import (
 	"context"
+	"errors"
+	"log"
 	"net/http"
 	"strings"
+	"toko-online/internal/domain"
 )
 
 type TokenParser interface {
@@ -36,5 +39,34 @@ func Authenticate(tokens TokenParser, next http.Handler) http.Handler {
 
 		ctx := context.WithValue(r.Context(), ctxKey{}, id)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+type UserFinder interface {
+	Profile(ctx context.Context, id int64) (*domain.User, error)
+}
+
+func RequireRole(users UserFinder, role domain.Role, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := UserIDFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+			return
+		}
+		user, err := users.Profile(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, domain.ErrUserNotFound) {
+				writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+				return
+			}
+			log.Printf("cek role gagal: %v", err)
+			writeError(w, http.StatusInternalServerError, "terjadi kesalahan")
+			return
+		}
+		if user.Role != role {
+			writeError(w, http.StatusForbidden, "akses ditolak")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
