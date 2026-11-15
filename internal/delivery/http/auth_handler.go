@@ -10,7 +10,8 @@ import (
 
 type AuthService interface {
 	Register(ctx context.Context, nama, email, password string) (*domain.User, error)
-	Login(ctx context.Context, email, password string) (*domain.User, error)
+	Login(ctx context.Context, email, password string) (*domain.LoginResult, error)
+	Profile(ctx context.Context, id int64) (*domain.User, error)
 }
 
 type AuthHandler struct {
@@ -62,9 +63,31 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.auth.Login(r.Context(), req.Email, req.Password)
+	result, err := h.auth.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
 		writeUsecaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeError(w, http.StatusMethodNotAllowed, "method tdak diizinkan")
+		return
+	}
+
+	id, ok := UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+		return
+	}
+
+	user, err := h.auth.Profile(r.Context(), id)
+	if err != nil {
+		writeUsecaseError(w, err)
+		return
 	}
 	writeJSON(w, http.StatusOK, user)
 }
@@ -77,9 +100,11 @@ func writeUsecaseError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		writeError(w, http.StatusUnauthorized, err.Error())
+	case errors.Is(err, domain.ErrUserNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
 	default:
 		log.Printf("error internal: %v", err)
-		writeError(w, http.StatusInternalServerError, "kesalahan pada server")
+		writeError(w, http.StatusInternalServerError, "terjadi kesalahan pada server")
 
 	}
 }

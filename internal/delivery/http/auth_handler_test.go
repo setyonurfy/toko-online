@@ -18,7 +18,13 @@ type fakeAuth struct {
 func (f *fakeAuth) Register(ctx context.Context, nama, email, password string) (*domain.User, error) {
 	return f.user, f.err
 }
-func (f *fakeAuth) Login(ctx context.Context, email, password string) (*domain.User, error) {
+func (f *fakeAuth) Login(ctx context.Context, email, password string) (*domain.LoginResult, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &domain.LoginResult{User: f.user, Token: "token-palsu"}, nil
+}
+func (f *fakeAuth) Profile(ctx context.Context, id int64) (*domain.User, error) {
 	return f.user, f.err
 }
 
@@ -134,6 +140,9 @@ func TestLoginHandler(t *testing.T) {
 			}
 			if tt.notBody != "" && strings.Contains(body, tt.notBody) {
 				t.Errorf("body = %s, tidak boleh memuat %q", body, tt.notBody)
+			}
+			if strings.Contains(strings.TrimSpace(rec.Body.String()), "\n") {
+				t.Errorf("respons ditulis lebih dari sekali: %q", rec.Body.String())
 			}
 		})
 	}

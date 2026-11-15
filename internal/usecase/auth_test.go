@@ -9,6 +9,18 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+type fakeTokens struct{}
+
+func (fakeTokens) Generate(userID int64) (string, error) {
+	return "token-palsu", nil
+}
+
+func newTestUsecase() *AuthUsecase {
+	uc := NewAuthUsecase(newMockRepo(), fakeTokens{})
+	uc.cost = bcrypt.MinCost
+	return uc
+}
+
 type mockUserRepo struct {
 	byEmail map[string]*domain.User
 	nextID  int64
@@ -48,14 +60,6 @@ func (m *mockUserRepo) GetById(ctx context.Context, id int64) (*domain.User, err
 		}
 	}
 	return nil, domain.ErrUserNotFound
-}
-
-// helper
-
-func newTestUsecase() *AuthUsecase {
-	uc := NewAuthUsecase(newMockRepo())
-	uc.cost = bcrypt.MinCost
-	return uc
 }
 
 // test
@@ -131,13 +135,19 @@ func TestLogin(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.alert, func(t *testing.T) {
-			u, err := uc.Login(ctx, tt.email, tt.password)
+			res, err := uc.Login(ctx, tt.email, tt.password)
 
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("error = %v, want %v", err, tt.wantErr)
 			}
-			if tt.wantErr == nil && u.Email != "jhondoe@mail.com" {
-				t.Errorf("email = %q, want jhondoe@mail.com", u.Email)
+			if tt.wantErr == nil {
+				if res.User.Email != "jhondoe@mail.com" {
+					t.Errorf("email = %q, want jhondoe@mail.com", res.User.Email)
+				}
+				if res.Token != "token-palsu" {
+					t.Errorf("token = %q, must be token-palsu", res.Token)
+				}
+
 			}
 		})
 	}

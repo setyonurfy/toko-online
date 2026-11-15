@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"time"
+	"toko-online/internal/auth"
 	"toko-online/internal/config"
 	"toko-online/internal/database"
 	handler "toko-online/internal/delivery/http"
@@ -14,6 +15,9 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if len(cfg.JWTSecret) < 32 {
+		log.Fatalf("JWT_SECRET wajib diisi, minimal 32 karakter")
+	}
 
 	db, err := database.Connect(context.Background(), cfg.DatabaseURL)
 	if err != nil {
@@ -23,12 +27,13 @@ func main() {
 	log.Println("database terhubung")
 
 	userRepo := repository.NewUserPostgres(db)
-	authUsecase := usecase.NewAuthUsecase(userRepo)
+	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
+	authUsecase := usecase.NewAuthUsecase(userRepo, tokens)
 	authHandler := handler.NewAuthHandler(authUsecase)
 
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
-		Handler:           handler.NewRouter(authHandler),
+		Handler:           handler.NewRouter(authHandler, tokens),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

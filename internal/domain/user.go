@@ -19,6 +19,11 @@ type UserRepository interface {
 	GetById(ctx context.Context, id int64) (*User, error)
 }
 
+type LoginResult struct {
+	User  *User  `json:"user"`
+	Token string `json:"token"`
+}
+
 var (
 	ErrUserNotFound       = errors.New("user tidak ditemukan")
 	ErrEmailAlreadyUsed   = errors.New("email sudah terdaftar")
