@@ -33,7 +33,7 @@ func Authenticate(tokens TokenParser, next http.Handler) http.Handler {
 		id, err := tokens.Parse(strings.TrimSpace(token))
 		if err != nil {
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			writeError(w, http.StatusUnauthorized, "token tidak valid atau kadaluearsa")
+			writeError(w, http.StatusUnauthorized, "token tidak valid atau kadaluwarsa")
 			return
 		}
 

@@ -22,14 +22,14 @@ type productPostgres struct {
 	db *sql.DB
 }
 
-func NewProductProstgres(db *sql.DB) domain.ProductRepository {
+func NewProductPostgres(db *sql.DB) domain.ProductRepository {
 	return &productPostgres{db: db}
 }
 
 func (r *productPostgres) Create(ctx context.Context, p *domain.Product) error {
 	const q = `INSERT INTO products (nama, deskripsi, harga, stok)
 	VALUES ($1, $2, $3, $4)
-	RETURNING id, creted_at, updated_at`
+	RETURNING id, created_at, updated_at`
 
 	err := r.db.QueryRowContext(ctx, q, p.Nama, p.Deskripsi, p.Harga, p.Stok).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
@@ -39,7 +39,7 @@ func (r *productPostgres) Create(ctx context.Context, p *domain.Product) error {
 }
 
 func (r *productPostgres) GetByID(ctx context.Context, id int64) (*domain.Product, error) {
-	const q = `SELECT` + productColumns + `FROM products WHERE id = $1`
+	const q = `SELECT ` + productColumns + ` FROM products WHERE id = $1`
 
 	var p domain.Product
 	if err := scanProduct(r.db.QueryRowContext(ctx, q, id), &p); err != nil {
@@ -52,7 +52,7 @@ func (r *productPostgres) GetByID(ctx context.Context, id int64) (*domain.Produc
 }
 
 func (r *productPostgres) List(ctx context.Context, limit, offset int) ([]domain.Product, error) {
-	const q = `SELECT ` + productColumns + `FROM products ORDER BY id LIMIT $1 OFFSET $2`
+	const q = `SELECT ` + productColumns + ` FROM products ORDER BY id LIMIT $1 OFFSET $2`
 
 	rows, err := r.db.QueryContext(ctx, q, limit, offset)
 	if err != nil {

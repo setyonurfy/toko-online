@@ -1,0 +1,5 @@
+./migrate.sh up                          # terapkan semua migrasi baru
+./migrate.sh version                     # lihat versi saat ini
+./migrate.sh create add_orders_table     # buat file migrasi berikutnya
+./migrate.sh down                        # mundurkan 1 migrasi (minta konfirmasi)
+./migrate.sh down 2                      # mundurkan 2 migrasi

@@ -35,10 +35,19 @@ func main() {
 	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
 	authUsecase := usecase.NewAuthUsecase(userRepo, tokens)
 	authHandler := handler.NewAuthHandler(authUsecase)
+	productRepo := repository.NewProductPostgres(db)
+	productUsecase := usecase.NewProductUsecase(productRepo)
+	productHandler := handler.NewProductHandler(productUsecase)
 
 	srv := &http.Server{
-		Addr:              ":" + cfg.Port,
-		Handler:           handler.NewRouter(authHandler, tokens, authUsecase, authLimiter),
+		Addr: ":" + cfg.Port,
+		Handler: handler.NewRouter(handler.Dependencies{
+			Auth:        authHandler,
+			Products:    productHandler,
+			Tokens:      tokens,
+			Users:       authUsecase,
+			AuthLimiter: authLimiter,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

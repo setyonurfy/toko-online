@@ -33,3 +33,4 @@ go.work.sum
 # .idea/
 # .vscode/
 .DS_Store
+.jwt_secret
