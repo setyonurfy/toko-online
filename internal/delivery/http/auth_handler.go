@@ -106,9 +106,12 @@ func writeUsecaseError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, domain.ErrProductInUse):
 		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, domain.ErrOrderNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, domain.ErrInsufficientStock):
+		writeError(w, http.StatusConflict, err.Error())
 	default:
 		log.Printf("error internal: %v", err)
 		writeError(w, http.StatusInternalServerError, "terjadi kesalahan pada server")
-
 	}
 }

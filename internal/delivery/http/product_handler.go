@@ -8,7 +8,7 @@ import (
 	"toko-online/internal/domain"
 )
 
-type ProductSevice interface {
+type ProductService interface {
 	Create(ctx context.Context, nama, deskripsi string, harga int64, stok int) (*domain.Product, error)
 	Get(ctx context.Context, id int64) (*domain.Product, error)
 	List(ctx context.Context, limit, offset int) ([]domain.Product, error)
@@ -17,10 +17,10 @@ type ProductSevice interface {
 }
 
 type ProductHandler struct {
-	products ProductSevice
+	products ProductService
 }
 
-func NewProductHandler(products ProductSevice) *ProductHandler {
+func NewProductHandler(products ProductService) *ProductHandler {
 	return &ProductHandler{products: products}
 }
 

@@ -40,10 +40,15 @@ func TestHealthHandler(t *testing.T) {
 		})
 	}
 }
-func newTestRouter(svc *fakeAuth, produk ProductSevice, parser TokenParser) http.Handler {
+func newTestRouter(svc *fakeAuth, produk ProductService, parser TokenParser) http.Handler {
+	return newTestRouterLengkap(svc, produk, &fakeOrders{}, parser)
+}
+
+func newTestRouterLengkap(svc *fakeAuth, produk ProductService, pesanan OrderService, parser TokenParser) http.Handler {
 	return NewRouter(Dependencies{
 		Auth:        NewAuthHandler(svc),
 		Products:    NewProductHandler(produk),
+		Orders:      NewOrderHandler(pesanan),
 		Tokens:      parser,
 		Users:       svc,
 		AuthLimiter: NewRateLimiter(6000, 1000),
@@ -160,6 +165,59 @@ func TestRouter_AksesProduk(t *testing.T) {
 			}
 			if produk.dipanggil != tt.wantDipanggil {
 				t.Errorf("usecase produk dipanggil = %v, ingin %v", produk.dipanggil, tt.wantDipanggil)
+			}
+		})
+	}
+}
+
+func TestRouter_AksesPesanan(t *testing.T) {
+	pembeli := &domain.User{ID: 7, Role: domain.RoleCustomer}
+	pesanan := &domain.Order{ID: 1, UserID: 7, Status: domain.OrderPending, Total: 50000}
+	const body = `{"items":[{"product_id":1,"jumlah":1}]}`
+
+	tests := []struct {
+		name          string
+		method        string
+		path          string
+		body          string
+		token         bool
+		wantStatus    int
+		wantDipanggil bool
+	}{
+		{"daftar tanpa token", http.MethodGet, "/orders", "", false, http.StatusUnauthorized, false},
+		{"buat tanpa token", http.MethodPost, "/orders", body, false, http.StatusUnauthorized, false},
+		{"detail tanpa token", http.MethodGet, "/orders/1", "", false, http.StatusUnauthorized, false},
+
+		{"daftar dengan token", http.MethodGet, "/orders", "", true, http.StatusOK, true},
+		{"buat dengan token", http.MethodPost, "/orders", body, true, http.StatusCreated, true},
+		{"detail dengan token", http.MethodGet, "/orders/1", "", true, http.StatusOK, true},
+
+		{"PUT ke koleksi tidak didukung", http.MethodPut, "/orders", body, true, http.StatusMethodNotAllowed, false},
+		{"POST ke detail tidak didukung", http.MethodPost, "/orders/1", body, true, http.StatusMethodNotAllowed, false},
+		{"DELETE ke detail tidak didukung", http.MethodDelete, "/orders/1", "", true, http.StatusMethodNotAllowed, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svcPesanan := &fakeOrders{order: pesanan}
+			router := newTestRouterLengkap(&fakeAuth{user: pembeli}, &fakeProducts{}, svcPesanan, fakeParser{id: 7})
+
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body))
+			if tt.token {
+				req.Header.Set("Authorization", "Bearer token-apa-saja")
+			}
+			rec := httptest.NewRecorder()
+
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, ingin %d (body: %s)", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if svcPesanan.dipanggil != tt.wantDipanggil {
+				t.Errorf("usecase pesanan dipanggil = %v, ingin %v", svcPesanan.dipanggil, tt.wantDipanggil)
+			}
+			if svcPesanan.dipanggil && svcPesanan.gotUserID != 7 {
+				t.Errorf("userID yang sampai ke usecase = %d, ingin 7 (dari token)", svcPesanan.gotUserID)
 			}
 		})
 	}

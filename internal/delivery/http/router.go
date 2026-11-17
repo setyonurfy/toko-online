@@ -2,12 +2,14 @@ package handler
 
 import (
 	"net/http"
+
 	"toko-online/internal/domain"
 )
 
 type Dependencies struct {
 	Auth        *AuthHandler
 	Products    *ProductHandler
+	Orders      *OrderHandler
 	Tokens      TokenParser
 	Users       UserFinder
 	AuthLimiter *RateLimiter
@@ -19,9 +21,17 @@ func NewRouter(d Dependencies) http.Handler {
 	adminOnly := func(h http.HandlerFunc) http.Handler {
 		return Authenticate(d.Tokens, RequireRole(d.Users, domain.RoleAdmin, h))
 	}
+	loginOnly := func(h http.HandlerFunc) http.Handler {
+		return Authenticate(d.Tokens, h)
+	}
+
 	createProduct := adminOnly(d.Products.Create)
 	updateProduct := adminOnly(d.Products.Update)
 	deleteProduct := adminOnly(d.Products.Delete)
+
+	createOrder := loginOnly(d.Orders.Create)
+	listOrders := loginOnly(d.Orders.List)
+	getOrder := loginOnly(d.Orders.Get)
 
 	mux.HandleFunc("/health", healthHandler)
 	mux.Handle("/auth/register", d.AuthLimiter.Middleware(http.HandlerFunc(d.Auth.Register)))
@@ -51,6 +61,27 @@ func NewRouter(d Dependencies) http.Handler {
 			methodNotAllowed(w, http.MethodGet, http.MethodPut, http.MethodDelete)
 		}
 	})
+
+	mux.HandleFunc("/orders", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			listOrders.ServeHTTP(w, r)
+		case http.MethodPost:
+			createOrder.ServeHTTP(w, r)
+		default:
+			methodNotAllowed(w, http.MethodGet, http.MethodPost)
+		}
+	})
+
+	mux.HandleFunc("/orders/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			getOrder.ServeHTTP(w, r)
+		default:
+			methodNotAllowed(w, http.MethodGet)
+		}
+	})
+
 	return mux
 }
 
