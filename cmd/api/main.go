@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"time"
+
 	"toko-online/internal/auth"
 	"toko-online/internal/config"
 	"toko-online/internal/database"
@@ -16,17 +17,18 @@ import (
 func main() {
 	cfg := config.Load()
 	if len(cfg.JWTSecret) < 32 {
-		log.Fatalf("JWT_SECRET wajib diisi, minimal 32 karakter")
+		log.Fatal("JWT_SECRET wajib diisi, minimal 32 karakter")
 	}
 
 	db, err := database.Connect(context.Background(), cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("gagal konek ke database: %v", err)
+		log.Fatalf("gagal konek database: %v", err)
 	}
 	defer db.Close()
 	log.Println("database terhubung")
 
 	authLimiter := handler.NewRateLimiter(10, 5) // 10 per menit, burst 5
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	authLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
@@ -35,15 +37,21 @@ func main() {
 	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
 	authUsecase := usecase.NewAuthUsecase(userRepo, tokens)
 	authHandler := handler.NewAuthHandler(authUsecase)
+
 	productRepo := repository.NewProductPostgres(db)
 	productUsecase := usecase.NewProductUsecase(productRepo)
 	productHandler := handler.NewProductHandler(productUsecase)
+
+	orderRepo := repository.NewOrderPostgres(db)
+	orderUsecase := usecase.NewOrderUsecase(orderRepo)
+	orderHandler := handler.NewOrderHandler(orderUsecase)
 
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,
 		Handler: handler.NewRouter(handler.Dependencies{
 			Auth:        authHandler,
 			Products:    productHandler,
+			Orders:      orderHandler,
 			Tokens:      tokens,
 			Users:       authUsecase,
 			AuthLimiter: authLimiter,
@@ -53,6 +61,7 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+
 	log.Printf("server berjalan di %s", srv.Addr)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
