@@ -49,15 +49,7 @@ func (u *ProductUsecase) Get(ctx context.Context, id int64) (*domain.Product, er
 }
 
 func (u *ProductUsecase) List(ctx context.Context, limit, offset int) ([]domain.Product, error) {
-	if limit <= 0 {
-		limit = defaultListLimit
-	}
-	if limit > maxListLimit {
-		limit = maxListLimit
-	}
-	if offset < 0 {
-		offset = 0
-	}
+	limit, offset = normalizePage(limit, offset)
 	return u.products.List(ctx, limit, offset)
 }
 

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"toko-online/internal/domain"
+
+	"github.com/lib/pq"
 )
 
 const productColumns = `id, nama, deskripsi, harga, stok, created_at, updated_at`
@@ -91,10 +93,16 @@ func (r *productPostgres) Update(ctx context.Context, p *domain.Product) error {
 }
 
 func (r *productPostgres) Delete(ctx context.Context, id int64) error {
+
 	res, err := r.db.ExecContext(ctx, `DELETE FROM products WHERE id = $1`, id)
 	if err != nil {
-		return fmt.Errorf("delete products: %w", err)
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23503" { // foreign_key_violation
+			return domain.ErrProductInUse
+		}
+		return fmt.Errorf("hapus produk: %w", err)
 	}
+
 	n, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("cek hasil hapus: %w", err)

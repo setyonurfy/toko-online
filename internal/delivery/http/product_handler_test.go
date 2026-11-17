@@ -279,4 +279,13 @@ func TestProductHandler_Delete(t *testing.T) {
 			t.Fatalf("status = %d, ingin 404", rec.Code)
 		}
 	})
+
+	t.Run("produk sudah pernah dipesan", func(t *testing.T) {
+		svc := &fakeProducts{err: domain.ErrProductInUse}
+		rec := kirim(NewProductHandler(svc).Delete, http.MethodDelete, "/products/5", "")
+
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("status = %d, ingin 409", rec.Code)
+		}
+	})
 }

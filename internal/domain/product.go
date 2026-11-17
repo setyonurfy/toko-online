@@ -17,6 +17,7 @@ type Product struct {
 }
 
 var ErrProductNotFound = errors.New("produk tidak ditemukan")
+var ErrProductInUse = errors.New("produk sudah pernah dipesan dan tidak dapat dihapus")
 
 type ProductRepository interface {
 	Create(ctx context.Context, p *Product) error
