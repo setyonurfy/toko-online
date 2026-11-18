@@ -20,6 +20,10 @@ type mockOrderRepo struct {
 	gotUserID    int64
 	gotLines     []domain.OrderLine
 
+	cancelErr    error
+	cancelCalled bool
+	gotCancelID  int64
+
 	lastLimit, lastOffset int
 }
 
@@ -61,6 +65,21 @@ func (m *mockOrderRepo) ListByUser(ctx context.Context, userID int64, limit, off
 		}
 	}
 	return hasil, nil
+}
+
+func (m *mockOrderRepo) Cancel(ctx context.Context, id int64) (*domain.Order, error) {
+	m.cancelCalled = true
+	m.gotCancelID = id
+	if m.cancelErr != nil {
+		return nil, m.cancelErr
+	}
+	o, ada := m.orders[id]
+	if !ada {
+		return nil, domain.ErrOrderNotFound
+	}
+	o.Status = domain.OrderCancelled
+	salinan := *o
+	return &salinan, nil
 }
 
 func newTestOrderUsecase() (*OrderUsecase, *mockOrderRepo) {

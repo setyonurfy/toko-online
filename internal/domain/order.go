@@ -11,12 +11,12 @@ type OrderStatus string
 const (
 	OrderPending   OrderStatus = "pending"
 	OrderPaid      OrderStatus = "paid"
-	OrderCancelled OrderStatus = "cancel"
+	OrderCancelled OrderStatus = "cancelled"
 )
 
 type OrderItem struct {
 	ProductID  int64  `json:"product_id"`
-	NamaProduk string `json:"nama_product"`
+	NamaProduk string `json:"nama_produk"`
 	Harga      int64  `json:"harga"`
 	Jumlah     int    `json:"jumlah"`
 	Subtotal   int64  `json:"subtotal"`
@@ -37,12 +37,14 @@ type OrderLine struct {
 }
 
 var (
-	ErrOrderNotFound     = errors.New("pesanan tidak di temukan")
-	ErrInsufficientStock = errors.New("stok tidak mencukupi")
+	ErrOrderNotFound       = errors.New("pesanan tidak ditemukan")
+	ErrInsufficientStock   = errors.New("stok tidak mencukupi")
+	ErrOrderNotCancellable = errors.New("pesanan tidak dapat dibatalkan")
 )
 
 type OrderRepository interface {
 	Create(ctx context.Context, userID int64, lines []OrderLine) (*Order, error)
 	GetByID(ctx context.Context, id int64) (*Order, error)
 	ListByUser(ctx context.Context, userID int64, limit, offset int) ([]Order, error)
+	Cancel(ctx context.Context, id int64) (*Order, error)
 }

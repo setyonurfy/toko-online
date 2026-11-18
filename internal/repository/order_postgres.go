@@ -165,3 +165,97 @@ func (r *orderPostgres) ListByUser(ctx context.Context, userID int64, limit, off
 	}
 	return hasil, nil
 }
+
+// stokKembali adalah jumlah barang satu produk yang harus dikembalikan ke stok.
+type stokKembali struct {
+	productID int64
+	jumlah    int64
+}
+
+func (r *orderPostgres) Cancel(ctx context.Context, id int64) (*domain.Order, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("mulai transaksi: %w", err)
+	}
+	defer tx.Rollback()
+
+	const qStatus = `UPDATE orders SET status = $1 WHERE id = $2 AND status = $3`
+	res, err := tx.ExecContext(ctx, qStatus, string(domain.OrderCancelled), id, string(domain.OrderPending))
+	if err != nil {
+		return nil, fmt.Errorf("ubah status pesanan: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("cek hasil ubah status: %w", err)
+	}
+	if n == 0 {
+		// Tidak ada baris yang cocok: pesanannya tidak ada, atau statusnya bukan pending.
+		var ada bool
+		const qAda = `SELECT EXISTS (SELECT 1 FROM orders WHERE id = $1)`
+		if err := tx.QueryRowContext(ctx, qAda, id).Scan(&ada); err != nil {
+			return nil, fmt.Errorf("cek pesanan: %w", err)
+		}
+		if !ada {
+			return nil, domain.ErrOrderNotFound
+		}
+		return nil, domain.ErrOrderNotCancellable
+	}
+
+	// 2. Ambil jumlah yang harus dikembalikan per produk, terurut naik menurut ID.
+	kembali, err := barangYangDikembalikan(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Kembalikan stok satu per satu, dengan urutan yang sama seperti saat
+	// pesanan dibuat, supaya tidak saling mengunci dengan pesanan lain.
+	const qStok = `UPDATE products SET stok = stok + $1, updated_at = NOW() WHERE id = $2`
+	for _, b := range kembali {
+		resStok, err := tx.ExecContext(ctx, qStok, b.jumlah, b.productID)
+		if err != nil {
+			return nil, fmt.Errorf("kembalikan stok produk %d: %w", b.productID, err)
+		}
+		nStok, err := resStok.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("cek hasil kembalikan stok produk %d: %w", b.productID, err)
+		}
+		if nStok != 1 {
+			return nil, fmt.Errorf("produk %d tidak ditemukan saat mengembalikan stok", b.productID)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit pembatalan: %w", err)
+	}
+
+	// Pesanan yang sudah dibatalkan tidak berubah lagi, jadi aman dibaca setelah commit.
+	return r.GetByID(ctx, id)
+}
+
+func barangYangDikembalikan(ctx context.Context, tx *sql.Tx, orderID int64) ([]stokKembali, error) {
+	const q = `
+		SELECT product_id, SUM(jumlah)
+		FROM order_items
+		WHERE order_id = $1
+		GROUP BY product_id
+		ORDER BY product_id`
+
+	rows, err := tx.QueryContext(ctx, q, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("query barang pesanan: %w", err)
+	}
+	defer rows.Close()
+
+	var hasil []stokKembali
+	for rows.Next() {
+		var b stokKembali
+		if err := rows.Scan(&b.productID, &b.jumlah); err != nil {
+			return nil, fmt.Errorf("scan barang pesanan: %w", err)
+		}
+		hasil = append(hasil, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterasi barang pesanan: %w", err)
+	}
+	return hasil, nil
+}

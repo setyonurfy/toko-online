@@ -14,6 +14,7 @@ type OrderService interface {
 	Place(ctx context.Context, userID int64, lines []domain.OrderLine) (*domain.Order, error)
 	Get(ctx context.Context, userID, orderID int64) (*domain.Order, error)
 	ListMine(ctx context.Context, userID int64, limit, offset int) ([]domain.Order, error)
+	Cancel(ctx context.Context, userID, orderID int64) (*domain.Order, error)
 }
 
 type OrderHandler struct {
@@ -118,6 +119,29 @@ func (h *OrderHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, orderListResponse{Data: pesanan})
 }
 
+func (h *OrderHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+	userID, ok := UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+		return
+	}
+
+	orderID, ok := idFromPathDenganAkhiran(r.URL.Path, "/orders/", "/cancel")
+	if !ok {
+		writeError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
+		return
+	}
+
+	order, err := h.orders.Cancel(r.Context(), userID, orderID)
+	if err != nil {
+		writeUsecaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, order)
+}
+
+// idFromPath mengambil ID dari path berbentuk "<prefix><id>" secara ketat:
+// hanya angka desimal baku ("5" sah; "05", "+5", "5/x", "abc" ditolak).
 func idFromPath(path, prefix string) (int64, bool) {
 	raw := strings.TrimPrefix(path, prefix)
 	if raw == "" || strings.Contains(raw, "/") {
@@ -128,4 +152,11 @@ func idFromPath(path, prefix string) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func idFromPathDenganAkhiran(path, prefix, akhiran string) (int64, bool) {
+	if !strings.HasSuffix(path, akhiran) {
+		return 0, false
+	}
+	return idFromPath(strings.TrimSuffix(path, akhiran), prefix)
 }

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"toko-online/internal/domain"
 )
@@ -32,6 +33,7 @@ func NewRouter(d Dependencies) http.Handler {
 	createOrder := loginOnly(d.Orders.Create)
 	listOrders := loginOnly(d.Orders.List)
 	getOrder := loginOnly(d.Orders.Get)
+	cancelOrder := loginOnly(d.Orders.Cancel)
 
 	mux.HandleFunc("/health", healthHandler)
 	mux.Handle("/auth/register", d.AuthLimiter.Middleware(http.HandlerFunc(d.Auth.Register)))
@@ -74,12 +76,22 @@ func NewRouter(d Dependencies) http.Handler {
 	})
 
 	mux.HandleFunc("/orders/", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			getOrder.ServeHTTP(w, r)
-		default:
-			methodNotAllowed(w, http.MethodGet)
+		// Bentuk "/orders/{id}/cancel" hanya menerima POST.
+		if strings.HasSuffix(r.URL.Path, "/cancel") {
+			if r.Method != http.MethodPost {
+				methodNotAllowed(w, http.MethodPost)
+				return
+			}
+			cancelOrder.ServeHTTP(w, r)
+			return
 		}
+
+		// Bentuk lain ("/orders/{id}") hanya menerima GET.
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		getOrder.ServeHTTP(w, r)
 	})
 
 	return mux
