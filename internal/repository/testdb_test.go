@@ -44,7 +44,7 @@ func openTestDB(t *testing.T) *sql.DB {
 
 func resetDB(t *testing.T, db *sql.DB) {
 	t.Helper()
-	if _, err := db.Exec(`TRUNCATE order_items, orders, products, users RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := db.Exec(`TRUNCATE payments, order_items, orders, products, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("reset database uji: %v", err)
 	}
 }
