@@ -40,6 +40,7 @@ func (r *paymentPostgres) GetPendingByOrder(ctx context.Context, orderID int64) 
 }
 
 func (r *paymentPostgres) CreatePending(ctx context.Context, orderID int64, reference string) (*domain.Payment, error) {
+
 	const q = `
 		INSERT INTO payments (order_id, reference, amount)
 		SELECT id, $2::text, total FROM orders WHERE id = $1 AND status = $3
@@ -53,12 +54,14 @@ func (r *paymentPostgres) CreatePending(ctx context.Context, orderID int64, refe
 
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Code == "23505" && pqErr.Constraint == "uq_payments_order_pending" {
+
 		return r.GetPendingByOrder(ctx, orderID)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("simpan tagihan: %w", err)
 	}
 
+	// Tidak ada baris yang dibuat: pesanannya tidak ada, atau statusnya bukan pending.
 	var ada bool
 	const qAda = `SELECT EXISTS (SELECT 1 FROM orders WHERE id = $1)`
 	if err := r.db.QueryRowContext(ctx, qAda, orderID).Scan(&ada); err != nil {
@@ -119,6 +122,7 @@ func (r *paymentPostgres) ApplyPaid(ctx context.Context, reference string, amoun
 			`UPDATE payments SET status = $1, paid_at = NOW() WHERE id = $2`,
 			string(domain.PaymentPaid), paymentID)
 	} else {
+
 		hasil = domain.OutcomeRefundNeeded
 		_, err = tx.ExecContext(ctx,
 			`UPDATE payments SET status = $1 WHERE id = $2`,

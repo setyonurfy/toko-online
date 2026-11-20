@@ -9,5 +9,15 @@ if [ -z "${JWT_SECRET:-}" ]; then
   JWT_SECRET="$(cat "$SECRET_FILE")"
 fi
 
-export JWT_SECRET
+WEBHOOK_FILE=".webhook_secret"
+
+if [ -z "${PAYMENT_WEBHOOK_SECRET:-}" ]; then
+  if [ ! -f "$WEBHOOK_FILE" ]; then
+    openssl rand -hex 32 > "$WEBHOOK_FILE"
+    chmod 600 "$WEBHOOK_FILE"
+  fi
+  PAYMENT_WEBHOOK_SECRET="$(cat "$WEBHOOK_FILE")"
+fi
+
+export JWT_SECRET PAYMENT_WEBHOOK_SECRET
 exec go run ./cmd/api

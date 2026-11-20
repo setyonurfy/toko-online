@@ -14,6 +14,7 @@ type Dependencies struct {
 	Tokens      TokenParser
 	Users       UserFinder
 	AuthLimiter *RateLimiter
+	Payments    *PaymentHandler
 }
 
 func NewRouter(d Dependencies) http.Handler {
@@ -34,6 +35,7 @@ func NewRouter(d Dependencies) http.Handler {
 	listOrders := loginOnly(d.Orders.List)
 	getOrder := loginOnly(d.Orders.Get)
 	cancelOrder := loginOnly(d.Orders.Cancel)
+	payOrder := loginOnly(d.Payments.Pay)
 
 	mux.HandleFunc("/health", healthHandler)
 	mux.Handle("/auth/register", d.AuthLimiter.Middleware(http.HandlerFunc(d.Auth.Register)))
@@ -76,22 +78,34 @@ func NewRouter(d Dependencies) http.Handler {
 	})
 
 	mux.HandleFunc("/orders/", func(w http.ResponseWriter, r *http.Request) {
-		// Bentuk "/orders/{id}/cancel" hanya menerima POST.
-		if strings.HasSuffix(r.URL.Path, "/cancel") {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/cancel"):
 			if r.Method != http.MethodPost {
 				methodNotAllowed(w, http.MethodPost)
 				return
 			}
 			cancelOrder.ServeHTTP(w, r)
-			return
+		case strings.HasSuffix(r.URL.Path, "/pay"):
+			if r.Method != http.MethodPost {
+				methodNotAllowed(w, http.MethodPost)
+				return
+			}
+			payOrder.ServeHTTP(w, r)
+		default:
+			if r.Method != http.MethodGet {
+				methodNotAllowed(w, http.MethodGet)
+				return
+			}
+			getOrder.ServeHTTP(w, r)
 		}
+	})
 
-		// Bentuk lain ("/orders/{id}") hanya menerima GET.
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, http.MethodGet)
+	mux.HandleFunc("/webhooks/payments", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, http.MethodPost)
 			return
 		}
-		getOrder.ServeHTTP(w, r)
+		d.Payments.Webhook(w, r)
 	})
 
 	return mux

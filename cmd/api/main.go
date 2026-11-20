@@ -10,6 +10,7 @@ import (
 	"toko-online/internal/config"
 	"toko-online/internal/database"
 	handler "toko-online/internal/delivery/http"
+	"toko-online/internal/payment"
 	"toko-online/internal/repository"
 	"toko-online/internal/usecase"
 )
@@ -18,6 +19,9 @@ func main() {
 	cfg := config.Load()
 	if len(cfg.JWTSecret) < 32 {
 		log.Fatal("JWT_SECRET wajib diisi, minimal 32 karakter")
+	}
+	if len(cfg.WebhookSecret) < 32 {
+		log.Fatal("PAYMENT_WEBHOOK_SECRET wajib diisi, minimal 32 karakter")
 	}
 
 	db, err := database.Connect(context.Background(), cfg.DatabaseURL)
@@ -46,12 +50,18 @@ func main() {
 	orderUsecase := usecase.NewOrderUsecase(orderRepo)
 	orderHandler := handler.NewOrderHandler(orderUsecase)
 
+	paymentRepo := repository.NewPaymentPostgres(db)
+	gateway := payment.NewFakeGateway(cfg.WebhookSecret)
+	paymentUsecase := usecase.NewPaymentUsecase(orderUsecase, paymentRepo, gateway)
+	paymentHandler := handler.NewPaymentHandler(paymentUsecase)
+
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,
 		Handler: handler.NewRouter(handler.Dependencies{
 			Auth:        authHandler,
 			Products:    productHandler,
 			Orders:      orderHandler,
+			Payments:    paymentHandler,
 			Tokens:      tokens,
 			Users:       authUsecase,
 			AuthLimiter: authLimiter,

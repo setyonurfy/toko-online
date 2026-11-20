@@ -112,6 +112,16 @@ func writeUsecaseError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, domain.ErrOrderNotCancellable):
 		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, domain.ErrOrderNotPayable):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, domain.ErrPaymentNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, domain.ErrAmountMismatch):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, domain.ErrInvalidSignature), errors.Is(err, domain.ErrStaleWebhook):
+		writeError(w, http.StatusUnauthorized, err.Error())
+	case errors.Is(err, domain.ErrMalformedWebhook):
+		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		log.Printf("error internal: %v", err)
 		writeError(w, http.StatusInternalServerError, "terjadi kesalahan pada server")

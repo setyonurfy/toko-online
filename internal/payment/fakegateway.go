@@ -25,6 +25,7 @@ func NewFakeGateway(secret string) *FakeGateway {
 	return &FakeGateway{secret: []byte(secret), now: time.Now}
 }
 
+// CreateCharge membuat referensi tagihan yang acak dan unik.
 func (g *FakeGateway) CreateCharge(ctx context.Context, orderID, amount int64) (domain.Charge, error) {
 	buf := make([]byte, 8)
 	if _, err := rand.Read(buf); err != nil {
@@ -52,6 +53,7 @@ type webhookBody struct {
 }
 
 func (g *FakeGateway) ParseWebhook(body []byte, timestamp, signature string) (domain.GatewayEvent, error) {
+
 	diberikan, err := hex.DecodeString(signature)
 	if err != nil || !hmac.Equal(diberikan, g.mac(timestamp, body)) {
 		return domain.GatewayEvent{}, domain.ErrInvalidSignature
