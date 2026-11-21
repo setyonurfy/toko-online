@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"toko-online/internal/domain"
 )
@@ -23,6 +24,12 @@ type mockOrderRepo struct {
 	cancelErr    error
 	cancelCalled bool
 	gotCancelID  int64
+
+	expireResults []int
+	expireErr     error
+	expireCalls   int
+	gotCutoff     time.Time
+	gotBatch      int
 
 	lastLimit, lastOffset int
 }
@@ -80,6 +87,20 @@ func (m *mockOrderRepo) Cancel(ctx context.Context, id int64) (*domain.Order, er
 	o.Status = domain.OrderCancelled
 	salinan := *o
 	return &salinan, nil
+}
+func (m *mockOrderRepo) ExpirePending(ctx context.Context, cutoff time.Time, batch int) (int, error) {
+	m.expireCalls++
+	m.gotCutoff = cutoff
+	m.gotBatch = batch
+	if m.expireErr != nil {
+		return 0, m.expireErr
+	}
+	if len(m.expireResults) == 0 {
+		return 0, nil
+	}
+	n := m.expireResults[0]
+	m.expireResults = m.expireResults[1:]
+	return n, nil
 }
 
 func newTestOrderUsecase() (*OrderUsecase, *mockOrderRepo) {

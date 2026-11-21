@@ -12,6 +12,7 @@ const (
 	OrderPending   OrderStatus = "pending"
 	OrderPaid      OrderStatus = "paid"
 	OrderCancelled OrderStatus = "cancelled"
+	OrderExpired   OrderStatus = "expired"
 )
 
 type OrderItem struct {
@@ -47,4 +48,5 @@ type OrderRepository interface {
 	GetByID(ctx context.Context, id int64) (*Order, error)
 	ListByUser(ctx context.Context, userID int64, limit, offset int) ([]Order, error)
 	Cancel(ctx context.Context, id int64) (*Order, error)
+	ExpirePending(ctx context.Context, cutoff time.Time, batch int) (int, error)
 }

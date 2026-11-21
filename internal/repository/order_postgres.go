@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"toko-online/internal/domain"
 )
@@ -166,7 +167,6 @@ func (r *orderPostgres) ListByUser(ctx context.Context, userID int64, limit, off
 	return hasil, nil
 }
 
-// stokKembali adalah jumlah barang satu produk yang harus dikembalikan ke stok.
 type stokKembali struct {
 	productID int64
 	jumlah    int64
@@ -201,34 +201,14 @@ func (r *orderPostgres) Cancel(ctx context.Context, id int64) (*domain.Order, er
 		return nil, domain.ErrOrderNotCancellable
 	}
 
-	// 2. Ambil jumlah yang harus dikembalikan per produk, terurut naik menurut ID.
-	kembali, err := barangYangDikembalikan(ctx, tx, id)
-	if err != nil {
+	if err := kembalikanStok(ctx, tx, id); err != nil {
 		return nil, err
-	}
-
-	// 3. Kembalikan stok satu per satu, dengan urutan yang sama seperti saat
-	// pesanan dibuat, supaya tidak saling mengunci dengan pesanan lain.
-	const qStok = `UPDATE products SET stok = stok + $1, updated_at = NOW() WHERE id = $2`
-	for _, b := range kembali {
-		resStok, err := tx.ExecContext(ctx, qStok, b.jumlah, b.productID)
-		if err != nil {
-			return nil, fmt.Errorf("kembalikan stok produk %d: %w", b.productID, err)
-		}
-		nStok, err := resStok.RowsAffected()
-		if err != nil {
-			return nil, fmt.Errorf("cek hasil kembalikan stok produk %d: %w", b.productID, err)
-		}
-		if nStok != 1 {
-			return nil, fmt.Errorf("produk %d tidak ditemukan saat mengembalikan stok", b.productID)
-		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit pembatalan: %w", err)
 	}
 
-	// Pesanan yang sudah dibatalkan tidak berubah lagi, jadi aman dibaca setelah commit.
 	return r.GetByID(ctx, id)
 }
 
@@ -258,4 +238,103 @@ func barangYangDikembalikan(ctx context.Context, tx *sql.Tx, orderID int64) ([]s
 		return nil, fmt.Errorf("iterasi barang pesanan: %w", err)
 	}
 	return hasil, nil
+}
+func kembalikanStok(ctx context.Context, tx *sql.Tx, orderID int64) error {
+	kembali, err := barangYangDikembalikan(ctx, tx, orderID)
+	if err != nil {
+		return err
+	}
+
+	const q = `UPDATE products SET stok = stok + $1, updated_at = NOW() WHERE id = $2`
+	for _, b := range kembali {
+		res, err := tx.ExecContext(ctx, q, b.jumlah, b.productID)
+		if err != nil {
+			return fmt.Errorf("kembalikan stok produk %d: %w", b.productID, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("cek hasil kembalikan stok produk %d: %w", b.productID, err)
+		}
+		if n != 1 {
+			return fmt.Errorf("produk %d tidak ditemukan saat mengembalikan stok", b.productID)
+		}
+	}
+	return nil
+}
+
+func (r *orderPostgres) ExpirePending(ctx context.Context, cutoff time.Time, batch int) (int, error) {
+	if batch <= 0 {
+		return 0, domain.ErrInvalidInput
+	}
+
+	const q = `
+		SELECT id FROM orders
+		WHERE status = $1 AND created_at < $2
+		ORDER BY created_at, id
+		LIMIT $3`
+	rows, err := r.db.QueryContext(ctx, q, string(domain.OrderPending), cutoff, batch)
+	if err != nil {
+		return 0, fmt.Errorf("cari pesanan kedaluwarsa: %w", err)
+	}
+	ids := make([]int64, 0, batch)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan pesanan kedaluwarsa: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("iterasi pesanan kedaluwarsa: %w", err)
+	}
+	rows.Close()
+
+	var galat []error
+	kedaluwarsa := 0
+	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			galat = append(galat, err)
+			break
+		}
+		ok, err := r.expireOne(ctx, id, cutoff)
+		if err != nil {
+			galat = append(galat, fmt.Errorf("pesanan %d: %w", id, err))
+			continue
+		}
+		if ok {
+			kedaluwarsa++
+		}
+	}
+	return kedaluwarsa, errors.Join(galat...)
+}
+
+func (r *orderPostgres) expireOne(ctx context.Context, id int64, cutoff time.Time) (bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("mulai transaksi: %w", err)
+	}
+	defer tx.Rollback()
+
+	const q = `UPDATE orders SET status = $1 WHERE id = $2 AND status = $3 AND created_at < $4`
+	res, err := tx.ExecContext(ctx, q, string(domain.OrderExpired), id, string(domain.OrderPending), cutoff)
+	if err != nil {
+		return false, fmt.Errorf("ubah status pesanan: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("cek hasil ubah status: %w", err)
+	}
+	if n == 0 {
+		return false, nil
+	}
+
+	if err := kembalikanStok(ctx, tx, id); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit kedaluwarsa: %w", err)
+	}
+	return true, nil
 }
