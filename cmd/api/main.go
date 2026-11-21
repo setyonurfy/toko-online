@@ -13,10 +13,14 @@ import (
 	"toko-online/internal/payment"
 	"toko-online/internal/repository"
 	"toko-online/internal/usecase"
+	"toko-online/internal/worker"
 )
 
 func main() {
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("konfigurasi tidak valid: %v", err)
+	}
 	if len(cfg.JWTSecret) < 32 {
 		log.Fatal("JWT_SECRET wajib diisi, minimal 32 karakter")
 	}
@@ -54,6 +58,13 @@ func main() {
 	gateway := payment.NewFakeGateway(cfg.WebhookSecret)
 	paymentUsecase := usecase.NewPaymentUsecase(orderUsecase, paymentRepo, gateway)
 	paymentHandler := handler.NewPaymentHandler(paymentUsecase)
+
+	expiryUsecase := usecase.NewOrderExpiryUsecase(orderRepo, cfg.PaymentTTL, cfg.ExpiryBatch)
+	expiryWorker, err := worker.NewExpiryWorker(expiryUsecase, cfg.ExpiryInterval)
+	if err != nil {
+		log.Fatalf("pekerja kedaluwarsa: %v", err)
+	}
+	go expiryWorker.Run(ctx)
 
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,
