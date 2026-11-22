@@ -8,16 +8,17 @@ import (
 )
 
 type Config struct {
-	Port           string
-	DatabaseURL    string
-	JWTSecret      string
-	JWTTTL         time.Duration
-	WebhookSecret  string
-	PaymentTTL     time.Duration
-	ExpiryInterval time.Duration
-	ExpiryBatch    int
-	LogLevel       string
-	LogFormat      string
+	Port            string
+	DatabaseURL     string
+	JWTSecret       string
+	JWTTTL          time.Duration
+	WebhookSecret   string
+	PaymentTTL      time.Duration
+	ExpiryInterval  time.Duration
+	ExpiryBatch     int
+	ShutdownTimeout time.Duration
+	LogLevel        string
+	LogFormat       string
 }
 
 func Load() (Config, error) {
@@ -33,18 +34,23 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	shutdown, err := getDuration("SHUTDOWN_TIMEOUT", 15*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
-		Port:           getEnv("PORT", "8080"),
-		DatabaseURL:    getEnv("DATABASE_URL", "postgres://localhost:5432/toko_online?sslmode=disable"),
-		JWTSecret:      os.Getenv("JWT_SECRET"),
-		JWTTTL:         24 * time.Hour,
-		WebhookSecret:  os.Getenv("PAYMENT_WEBHOOK_SECRET"),
-		PaymentTTL:     ttl,
-		ExpiryInterval: interval,
-		ExpiryBatch:    batch,
-		LogLevel:       getEnv("LOG_LEVEL", "info"),
-		LogFormat:      getEnv("LOG_FORMAT", "text"),
+		Port:            getEnv("PORT", "8080"),
+		DatabaseURL:     getEnv("DATABASE_URL", "postgres://localhost:5432/toko_online?sslmode=disable"),
+		JWTSecret:       os.Getenv("JWT_SECRET"),
+		JWTTTL:          24 * time.Hour,
+		WebhookSecret:   os.Getenv("PAYMENT_WEBHOOK_SECRET"),
+		PaymentTTL:      ttl,
+		ExpiryInterval:  interval,
+		ExpiryBatch:     batch,
+		ShutdownTimeout: shutdown,
+		LogLevel:        getEnv("LOG_LEVEL", "info"),
+		LogFormat:       getEnv("LOG_FORMAT", "text"),
 	}, nil
 }
 

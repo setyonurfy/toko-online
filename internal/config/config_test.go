@@ -72,3 +72,74 @@ func TestLoad_NilaiTidakValid(t *testing.T) {
 		})
 	}
 }
+func TestLoad_LogBawaan(t *testing.T) {
+	aturEnv(t, "", "", "")
+	t.Setenv("LOG_LEVEL", "")
+	t.Setenv("LOG_FORMAT", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load gagal: %v", err)
+	}
+	if cfg.LogLevel != "info" {
+		t.Errorf("LogLevel = %q, ingin info", cfg.LogLevel)
+	}
+	if cfg.LogFormat != "text" {
+		t.Errorf("LogFormat = %q, ingin text", cfg.LogFormat)
+	}
+}
+
+func TestLoad_LogDariEnvironment(t *testing.T) {
+	aturEnv(t, "", "", "")
+	t.Setenv("LOG_LEVEL", "debug")
+	t.Setenv("LOG_FORMAT", "json")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load gagal: %v", err)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("LogLevel = %q, ingin debug", cfg.LogLevel)
+	}
+	if cfg.LogFormat != "json" {
+		t.Errorf("LogFormat = %q, ingin json", cfg.LogFormat)
+	}
+}
+func TestLoad_ShutdownBawaan(t *testing.T) {
+	aturEnv(t, "", "", "")
+	t.Setenv("SHUTDOWN_TIMEOUT", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load gagal: %v", err)
+	}
+	if cfg.ShutdownTimeout != 15*time.Second {
+		t.Errorf("ShutdownTimeout = %v, ingin 15s", cfg.ShutdownTimeout)
+	}
+}
+
+func TestLoad_ShutdownDariEnvironment(t *testing.T) {
+	aturEnv(t, "", "", "")
+	t.Setenv("SHUTDOWN_TIMEOUT", "30s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load gagal: %v", err)
+	}
+	if cfg.ShutdownTimeout != 30*time.Second {
+		t.Errorf("ShutdownTimeout = %v, ingin 30s", cfg.ShutdownTimeout)
+	}
+}
+
+func TestLoad_ShutdownTidakValid(t *testing.T) {
+	for _, nilai := range []string{"abc", "0s", "-5s"} {
+		t.Run(nilai, func(t *testing.T) {
+			aturEnv(t, "", "", "")
+			t.Setenv("SHUTDOWN_TIMEOUT", nilai)
+
+			if _, err := Load(); err == nil {
+				t.Errorf("Load harus gagal untuk SHUTDOWN_TIMEOUT=%q", nilai)
+			}
+		})
+	}
+}

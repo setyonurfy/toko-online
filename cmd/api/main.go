@@ -2,9 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"toko-online/internal/auth"
@@ -19,35 +25,47 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		slog.Error("aplikasi berhenti karena galat", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		fatal("konfigurasi tidak valid", "error", err)
+		return fmt.Errorf("konfigurasi tidak valid: %w", err)
 	}
 
 	logger, err := logging.New(os.Stderr, cfg.LogLevel, cfg.LogFormat)
 	if err != nil {
-		fatal("konfigurasi log tidak valid", "error", err)
+		return fmt.Errorf("konfigurasi log tidak valid: %w", err)
 	}
 	slog.SetDefault(logger)
 
 	if len(cfg.JWTSecret) < 32 {
-		fatal("JWT_SECRET wajib diisi, minimal 32 karakter")
+		return errors.New("JWT_SECRET wajib diisi, minimal 32 karakter")
 	}
 	if len(cfg.WebhookSecret) < 32 {
-		fatal("PAYMENT_WEBHOOK_SECRET wajib diisi, minimal 32 karakter")
+		return errors.New("PAYMENT_WEBHOOK_SECRET wajib diisi, minimal 32 karakter")
 	}
 
-	db, err := database.Connect(context.Background(), cfg.DatabaseURL)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+
+	db, err := database.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
-		fatal("gagal konek database", "error", err)
+		return fmt.Errorf("gagal konek database: %w", err)
 	}
 	defer db.Close()
 	slog.Info("database terhubung")
 
 	authLimiter := handler.NewRateLimiter(10, 5) // 10 per menit, burst 5
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	authLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
 
 	userRepo := repository.NewUserPostgres(db)
@@ -71,9 +89,8 @@ func main() {
 	expiryUsecase := usecase.NewOrderExpiryUsecase(orderRepo, cfg.PaymentTTL, cfg.ExpiryBatch)
 	expiryWorker, err := worker.NewExpiryWorker(expiryUsecase, cfg.ExpiryInterval)
 	if err != nil {
-		fatal("gagal membuat pekerja kedaluwarsa", "error", err)
+		return fmt.Errorf("gagal membuat pekerja kedaluwarsa: %w", err)
 	}
-	go expiryWorker.Run(ctx)
 
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,
@@ -91,13 +108,52 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	slog.Info("server berjalan", "addr", srv.Addr)
-	if err := srv.ListenAndServe(); err != nil {
-		fatal("server berhenti", "error", err)
+
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		return fmt.Errorf("gagal membuka port %s: %w", cfg.Port, err)
 	}
+
+	var background sync.WaitGroup
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		expiryWorker.Run(ctx)
+	}()
+
+	slog.Info("server berjalan", "addr", srv.Addr)
+	err = serve(ctx, srv, ln, cfg.ShutdownTimeout)
+
+	stop()
+	background.Wait()
+	slog.Info("server berhenti")
+	return err
 }
 
-func fatal(msg string, args ...any) {
-	slog.Error(msg, args...)
-	os.Exit(1)
+func serve(ctx context.Context, srv *http.Server, ln net.Listener, shutdownTimeout time.Duration) error {
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Serve(ln)
+	}()
+
+	select {
+	case err := <-errCh:
+		return fmt.Errorf("server berhenti tak terduga: %w", err)
+	case <-ctx.Done():
+	}
+
+	slog.Info("sinyal berhenti diterima, menunggu permintaan yang sedang berjalan", "timeout", shutdownTimeout)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		srv.Close()
+		return fmt.Errorf("shutdown server: %w", err)
+	}
+
+	if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("server berhenti tak terduga: %w", err)
+	}
+	return nil
 }
