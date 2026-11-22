@@ -3,7 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -17,7 +17,7 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.WriteHeader(status)
 
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Printf("response gagal: %v", err)
+		slog.Error("response gagal", "error", err)
 	}
 }
 
@@ -36,7 +36,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 			writeError(w, http.StatusRequestEntityTooLarge, "body terlalu besar")
 			return false
 		}
-		log.Printf("decode json gagal: %v", err)
+		slog.Info("decode json gagal", "error", err)
 		writeError(w, http.StatusBadRequest, "body JSON tidak valid")
 		return false
 	}

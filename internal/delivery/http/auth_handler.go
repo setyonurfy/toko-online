@@ -3,7 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"toko-online/internal/domain"
 )
@@ -123,7 +123,7 @@ func writeUsecaseError(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrMalformedWebhook):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
-		log.Printf("error internal: %v", err)
+		slog.Error("error internal", "error", err)
 		writeError(w, http.StatusInternalServerError, "terjadi kesalahan pada server")
 	}
 }

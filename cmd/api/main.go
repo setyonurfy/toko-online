@@ -2,14 +2,16 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"toko-online/internal/auth"
 	"toko-online/internal/config"
 	"toko-online/internal/database"
 	handler "toko-online/internal/delivery/http"
+	"toko-online/internal/logging"
 	"toko-online/internal/payment"
 	"toko-online/internal/repository"
 	"toko-online/internal/usecase"
@@ -19,21 +21,28 @@ import (
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("konfigurasi tidak valid: %v", err)
+		fatal("konfigurasi tidak valid", "error", err)
 	}
+
+	logger, err := logging.New(os.Stderr, cfg.LogLevel, cfg.LogFormat)
+	if err != nil {
+		fatal("konfigurasi log tidak valid", "error", err)
+	}
+	slog.SetDefault(logger)
+
 	if len(cfg.JWTSecret) < 32 {
-		log.Fatal("JWT_SECRET wajib diisi, minimal 32 karakter")
+		fatal("JWT_SECRET wajib diisi, minimal 32 karakter")
 	}
 	if len(cfg.WebhookSecret) < 32 {
-		log.Fatal("PAYMENT_WEBHOOK_SECRET wajib diisi, minimal 32 karakter")
+		fatal("PAYMENT_WEBHOOK_SECRET wajib diisi, minimal 32 karakter")
 	}
 
 	db, err := database.Connect(context.Background(), cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("gagal konek database: %v", err)
+		fatal("gagal konek database", "error", err)
 	}
 	defer db.Close()
-	log.Println("database terhubung")
+	slog.Info("database terhubung")
 
 	authLimiter := handler.NewRateLimiter(10, 5) // 10 per menit, burst 5
 
@@ -62,7 +71,7 @@ func main() {
 	expiryUsecase := usecase.NewOrderExpiryUsecase(orderRepo, cfg.PaymentTTL, cfg.ExpiryBatch)
 	expiryWorker, err := worker.NewExpiryWorker(expiryUsecase, cfg.ExpiryInterval)
 	if err != nil {
-		log.Fatalf("pekerja kedaluwarsa: %v", err)
+		fatal("gagal membuat pekerja kedaluwarsa", "error", err)
 	}
 	go expiryWorker.Run(ctx)
 
@@ -82,9 +91,13 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-
-	log.Printf("server berjalan di %s", srv.Addr)
+	slog.Info("server berjalan", "addr", srv.Addr)
 	if err := srv.ListenAndServe(); err != nil {
-		log.Fatal(err)
+		fatal("server berhenti", "error", err)
 	}
+}
+
+func fatal(msg string, args ...any) {
+	slog.Error(msg, args...)
+	os.Exit(1)
 }

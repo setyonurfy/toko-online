@@ -3,7 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"toko-online/internal/domain"
@@ -59,7 +59,7 @@ func RequireRole(users UserFinder, role domain.Role, next http.Handler) http.Han
 				writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
 				return
 			}
-			log.Printf("cek role gagal: %v", err)
+			slog.Error("cek role gagal", "error", err)
 			writeError(w, http.StatusInternalServerError, "terjadi kesalahan")
 			return
 		}

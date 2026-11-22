@@ -16,6 +16,8 @@ type Config struct {
 	PaymentTTL     time.Duration
 	ExpiryInterval time.Duration
 	ExpiryBatch    int
+	LogLevel       string
+	LogFormat      string
 }
 
 func Load() (Config, error) {
@@ -41,6 +43,8 @@ func Load() (Config, error) {
 		PaymentTTL:     ttl,
 		ExpiryInterval: interval,
 		ExpiryBatch:    batch,
+		LogLevel:       getEnv("LOG_LEVEL", "info"),
+		LogFormat:      getEnv("LOG_FORMAT", "text"),
 	}, nil
 }
 

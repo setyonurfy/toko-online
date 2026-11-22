@@ -2,7 +2,7 @@ package worker
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 	"toko-online/internal/domain"
 )
@@ -14,14 +14,14 @@ type Expirer interface {
 type ExpiryWorker struct {
 	expirer  Expirer
 	interval time.Duration
-	logf     func(format string, args ...any)
+	logger   *slog.Logger
 }
 
 func NewExpiryWorker(expirer Expirer, interval time.Duration) (*ExpiryWorker, error) {
 	if expirer == nil || interval <= 0 {
 		return nil, domain.ErrInvalidInput
 	}
-	return &ExpiryWorker{expirer: expirer, interval: interval, logf: log.Printf}, nil
+	return &ExpiryWorker{expirer: expirer, interval: interval, logger: slog.Default()}, nil
 }
 
 func (w *ExpiryWorker) Run(ctx context.Context) {
@@ -43,15 +43,15 @@ func (w *ExpiryWorker) Run(ctx context.Context) {
 func (w *ExpiryWorker) tick(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			w.logf("worker kedaluwarsa: panic dipulihkan: %v", r)
+			w.logger.Error("worker kedaluwarsa: panic dipulihkan", "panic", r)
 		}
 	}()
 
 	n, err := w.expirer.ExpireDue(ctx)
 	if n > 0 {
-		w.logf("%d pesanan kedaluwarsa, stok di kembalikan", n)
+		w.logger.Info("pesanan kedaluwarsa, stok dikembalikan", "count", n)
 	}
 	if err != nil && ctx.Err() == nil {
-		w.logf("worker kedaluwarsa gagal: %v", err)
+		w.logger.Error("worker kedaluwarsa gagal", "error", err)
 	}
 }

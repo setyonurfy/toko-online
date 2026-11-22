@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -40,7 +42,7 @@ func buatWorker(t *testing.T, f *fakeExpirer, interval time.Duration) *ExpiryWor
 	if err != nil {
 		t.Fatalf("NewExpiryWorker gagal: %v", err)
 	}
-	w.logf = func(string, ...any) {}
+	w.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	return w
 }
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"toko-online/internal/domain"
@@ -72,7 +72,7 @@ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 
 	outcome, err := h.payments.HandleWebhook(r.Context(), body, timestamp, signature)
 	if err != nil {
-		log.Printf("webhook ditolak dari %s: %v", clientIP(r), err)
+		slog.Warn("webhook ditolak", "ip", clientIP(r), "error", err)
 		writeUsecaseError(w, err)
 		return
 	}

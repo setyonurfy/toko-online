@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"toko-online/internal/domain"
 )
@@ -67,7 +67,7 @@ func (u *PaymentUsecase) HandleWebhook(ctx context.Context, body []byte, timesta
 		return "", err
 	}
 	if outcome == domain.OutcomeRefundNeeded {
-		log.Printf("PERHATIAN: pembayaran %s diterima tetapi pesanannya tidak dapat lunas (perlu pengembalian dana)", event.Reference)
+		slog.Warn("pembayaran diterima tetapi pesanan tidak dapat lunas, perlu pengembalian dana", "reference", event.Reference)
 	}
 	return outcome, nil
 }

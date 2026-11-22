@@ -2,7 +2,7 @@ package handler
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -89,7 +89,7 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		ok, tunggu := rl.Allow(clientIP(r))
 		if !ok {
 			detik := int(math.Ceil(tunggu.Seconds()))
-			log.Printf("rate limit: %s ditolak di %s", clientIP(r), r.URL.Path)
+			slog.Warn("rate limit menolak permintaan", "ip", clientIP(r), "path", r.URL.Path)
 			w.Header().Set("Retry-After", strconv.Itoa(detik))
 			writeError(w, http.StatusTooManyRequests, "terlalu banyak percobaan, coba lagi nanti")
 			return
