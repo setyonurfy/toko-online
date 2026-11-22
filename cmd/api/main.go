@@ -13,15 +13,15 @@ import (
 	"syscall"
 	"time"
 
-	"toko-online/internal/auth"
-	"toko-online/internal/config"
-	"toko-online/internal/database"
 	handler "toko-online/internal/delivery/http"
-	"toko-online/internal/logging"
-	"toko-online/internal/payment"
+	"toko-online/internal/infrastructure/auth"
+	"toko-online/internal/infrastructure/config"
+	"toko-online/internal/infrastructure/database"
+	"toko-online/internal/infrastructure/logging"
+	"toko-online/internal/infrastructure/payment"
+	"toko-online/internal/infrastructure/worker"
 	"toko-online/internal/repository"
 	"toko-online/internal/usecase"
-	"toko-online/internal/worker"
 )
 
 func main() {
