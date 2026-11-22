@@ -13,14 +13,14 @@ import (
 	"syscall"
 	"time"
 
-	handler "toko-online/internal/delivery/http"
+	handler "toko-online/internal/adapter/delivery/http"
+	"toko-online/internal/adapter/repository/postgres"
 	"toko-online/internal/infrastructure/auth"
 	"toko-online/internal/infrastructure/config"
 	"toko-online/internal/infrastructure/database"
 	"toko-online/internal/infrastructure/logging"
 	"toko-online/internal/infrastructure/payment"
 	"toko-online/internal/infrastructure/worker"
-	"toko-online/internal/repository"
 	"toko-online/internal/usecase"
 )
 
@@ -68,20 +68,20 @@ func run() error {
 
 	authLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
 
-	userRepo := repository.NewUserPostgres(db)
+	userRepo := postgres.NewUserPostgres(db)
 	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
 	authUsecase := usecase.NewAuthUsecase(userRepo, tokens)
 	authHandler := handler.NewAuthHandler(authUsecase)
 
-	productRepo := repository.NewProductPostgres(db)
+	productRepo := postgres.NewProductPostgres(db)
 	productUsecase := usecase.NewProductUsecase(productRepo)
 	productHandler := handler.NewProductHandler(productUsecase)
 
-	orderRepo := repository.NewOrderPostgres(db)
+	orderRepo := postgres.NewOrderPostgres(db)
 	orderUsecase := usecase.NewOrderUsecase(orderRepo)
 	orderHandler := handler.NewOrderHandler(orderUsecase)
 
-	paymentRepo := repository.NewPaymentPostgres(db)
+	paymentRepo := postgres.NewPaymentPostgres(db)
 	gateway := payment.NewFakeGateway(cfg.WebhookSecret)
 	paymentUsecase := usecase.NewPaymentUsecase(orderUsecase, paymentRepo, gateway)
 	paymentHandler := handler.NewPaymentHandler(paymentUsecase)

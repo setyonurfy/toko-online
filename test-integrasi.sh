@@ -9,4 +9,4 @@ if ! psql postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$TEST_DB'" | g
 fi
 
 DATABASE_URL="$TEST_DATABASE_URL" ./migrate.sh up
-go test -count=1 -race -v ./internal/repository/
+go test -count=1 -race -v ./internal/adapter/repository/postgres/
