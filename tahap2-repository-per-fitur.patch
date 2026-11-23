@@ -1,0 +1,2742 @@
+diff --git a/internal/adapter/repository/postgres/order/cancel.go b/internal/adapter/repository/postgres/order/cancel.go
+new file mode 100644
+index 0000000..ba451b1
+--- /dev/null
++++ b/internal/adapter/repository/postgres/order/cancel.go
+@@ -0,0 +1,105 @@
++package order
++
++import (
++	"context"
++	"database/sql"
++	"fmt"
++
++	"toko-online/internal/domain"
++)
++
++type stokKembali struct {
++	productID int64
++	jumlah    int64
++}
++
++func (r *orderPostgres) Cancel(ctx context.Context, id int64) (*domain.Order, error) {
++	tx, err := r.db.BeginTx(ctx, nil)
++	if err != nil {
++		return nil, fmt.Errorf("mulai transaksi: %w", err)
++	}
++	defer tx.Rollback()
++
++	const qStatus = `UPDATE orders SET status = $1 WHERE id = $2 AND status = $3`
++	res, err := tx.ExecContext(ctx, qStatus, string(domain.OrderCancelled), id, string(domain.OrderPending))
++	if err != nil {
++		return nil, fmt.Errorf("ubah status pesanan: %w", err)
++	}
++	n, err := res.RowsAffected()
++	if err != nil {
++		return nil, fmt.Errorf("cek hasil ubah status: %w", err)
++	}
++	if n == 0 {
++		// Tidak ada baris yang cocok: pesanannya tidak ada, atau statusnya bukan pending.
++		var ada bool
++		const qAda = `SELECT EXISTS (SELECT 1 FROM orders WHERE id = $1)`
++		if err := tx.QueryRowContext(ctx, qAda, id).Scan(&ada); err != nil {
++			return nil, fmt.Errorf("cek pesanan: %w", err)
++		}
++		if !ada {
++			return nil, domain.ErrOrderNotFound
++		}
++		return nil, domain.ErrOrderNotCancellable
++	}
++
++	if err := kembalikanStok(ctx, tx, id); err != nil {
++		return nil, err
++	}
++
++	if err := tx.Commit(); err != nil {
++		return nil, fmt.Errorf("commit pembatalan: %w", err)
++	}
++
++	return r.GetByID(ctx, id)
++}
++
++func barangYangDikembalikan(ctx context.Context, tx *sql.Tx, orderID int64) ([]stokKembali, error) {
++	const q = `
++		SELECT product_id, SUM(jumlah)
++		FROM order_items
++		WHERE order_id = $1
++		GROUP BY product_id
++		ORDER BY product_id`
++
++	rows, err := tx.QueryContext(ctx, q, orderID)
++	if err != nil {
++		return nil, fmt.Errorf("query barang pesanan: %w", err)
++	}
++	defer rows.Close()
++
++	var hasil []stokKembali
++	for rows.Next() {
++		var b stokKembali
++		if err := rows.Scan(&b.productID, &b.jumlah); err != nil {
++			return nil, fmt.Errorf("scan barang pesanan: %w", err)
++		}
++		hasil = append(hasil, b)
++	}
++	if err := rows.Err(); err != nil {
++		return nil, fmt.Errorf("iterasi barang pesanan: %w", err)
++	}
++	return hasil, nil
++}
++
++func kembalikanStok(ctx context.Context, tx *sql.Tx, orderID int64) error {
++	kembali, err := barangYangDikembalikan(ctx, tx, orderID)
++	if err != nil {
++		return err
++	}
++
++	const q = `UPDATE products SET stok = stok + $1, updated_at = NOW() WHERE id = $2`
++	for _, b := range kembali {
++		res, err := tx.ExecContext(ctx, q, b.jumlah, b.productID)
++		if err != nil {
++			return fmt.Errorf("kembalikan stok produk %d: %w", b.productID, err)
++		}
++		n, err := res.RowsAffected()
++		if err != nil {
++			return fmt.Errorf("cek hasil kembalikan stok produk %d: %w", b.productID, err)
++		}
++		if n != 1 {
++			return fmt.Errorf("produk %d tidak ditemukan saat mengembalikan stok", b.productID)
++		}
++	}
++	return nil
++}
+diff --git a/internal/adapter/repository/postgres/order_cancel_postgres_test.go b/internal/adapter/repository/postgres/order/cancel_test.go
+similarity index 71%
+rename from internal/adapter/repository/postgres/order_cancel_postgres_test.go
+rename to internal/adapter/repository/postgres/order/cancel_test.go
+index 21ce6a5..18a3ffe 100644
+--- a/internal/adapter/repository/postgres/order_cancel_postgres_test.go
++++ b/internal/adapter/repository/postgres/order/cancel_test.go
+@@ -1,4 +1,4 @@
+-package postgres
++package order_test
+ 
+ import (
+ 	"context"
+@@ -7,18 +7,20 @@ import (
+ 	"sync/atomic"
+ 	"testing"
+ 
++	"toko-online/internal/adapter/repository/postgres/order"
++	"toko-online/internal/adapter/repository/postgres/testdb"
+ 	"toko-online/internal/domain"
+ )
+ 
+ func TestOrderCancel_MengembalikanStok(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
+ 	ctx := context.Background()
+ 
+-	user := seedUser(t, db, "siti@mail.com")
+-	a := seedProduct(t, db, "Barang A", 10000, 10)
+-	b := seedProduct(t, db, "Barang B", 20000, 5)
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++	a := testdb.SeedProduct(t, db, "Barang A", 10000, 10)
++	b := testdb.SeedProduct(t, db, "Barang B", 20000, 5)
+ 
+ 	o, err := repo.Create(ctx, user, []domain.OrderLine{
+ 		{ProductID: a, Jumlah: 3},
+@@ -27,7 +29,7 @@ func TestOrderCancel_MengembalikanStok(t *testing.T) {
+ 	if err != nil {
+ 		t.Fatalf("setup gagal: %v", err)
+ 	}
+-	if stokA, stokB := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, a), hitung(t, db, `SELECT stok FROM products WHERE id = $1`, b); stokA != 7 || stokB != 3 {
++	if stokA, stokB := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, a), testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, b); stokA != 7 || stokB != 3 {
+ 		t.Fatalf("stok setelah memesan = (%d, %d), ingin (7, 3)", stokA, stokB)
+ 	}
+ 
+@@ -42,10 +44,10 @@ func TestOrderCancel_MengembalikanStok(t *testing.T) {
+ 	if len(dibatalkan.Items) != 2 {
+ 		t.Errorf("jumlah barang pada hasil = %d, ingin 2", len(dibatalkan.Items))
+ 	}
+-	if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, a); stok != 10 {
++	if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, a); stok != 10 {
+ 		t.Errorf("stok A = %d, ingin 10 (kembali ke awal)", stok)
+ 	}
+-	if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, b); stok != 5 {
++	if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, b); stok != 5 {
+ 		t.Errorf("stok B = %d, ingin 5 (kembali ke awal)", stok)
+ 	}
+ 
+@@ -59,14 +61,14 @@ func TestOrderCancel_MengembalikanStok(t *testing.T) {
+ }
+ 
+ func TestOrderCancel_HanyaPesananPending(t *testing.T) {
+-	db := openTestDB(t)
+-	repo := NewOrderPostgres(db)
++	db := testdb.Open(t)
++	repo := order.NewOrderPostgres(db)
+ 	ctx := context.Background()
+ 
+ 	t.Run("sudah dibatalkan: stok tidak boleh dikembalikan dua kali", func(t *testing.T) {
+-		resetDB(t, db)
+-		user := seedUser(t, db, "siti@mail.com")
+-		produk := seedProduct(t, db, "Barang A", 10000, 10)
++		testdb.Reset(t, db)
++		user := testdb.SeedUser(t, db, "siti@mail.com")
++		produk := testdb.SeedProduct(t, db, "Barang A", 10000, 10)
+ 
+ 		o, err := repo.Create(ctx, user, []domain.OrderLine{{ProductID: produk, Jumlah: 3}})
+ 		if err != nil {
+@@ -81,15 +83,15 @@ func TestOrderCancel_HanyaPesananPending(t *testing.T) {
+ 		if !errors.Is(err, domain.ErrOrderNotCancellable) {
+ 			t.Fatalf("pembatalan kedua: error = %v, ingin ErrOrderNotCancellable", err)
+ 		}
+-		if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != 10 {
++		if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != 10 {
+ 			t.Errorf("stok = %d, ingin 10 (tidak boleh bertambah lagi)", stok)
+ 		}
+ 	})
+ 
+ 	t.Run("sudah dibayar: tidak boleh dibatalkan", func(t *testing.T) {
+-		resetDB(t, db)
+-		user := seedUser(t, db, "siti@mail.com")
+-		produk := seedProduct(t, db, "Barang A", 10000, 10)
++		testdb.Reset(t, db)
++		user := testdb.SeedUser(t, db, "siti@mail.com")
++		produk := testdb.SeedProduct(t, db, "Barang A", 10000, 10)
+ 
+ 		o, err := repo.Create(ctx, user, []domain.OrderLine{{ProductID: produk, Jumlah: 3}})
+ 		if err != nil {
+@@ -104,7 +106,7 @@ func TestOrderCancel_HanyaPesananPending(t *testing.T) {
+ 		if !errors.Is(err, domain.ErrOrderNotCancellable) {
+ 			t.Fatalf("error = %v, ingin ErrOrderNotCancellable", err)
+ 		}
+-		if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != 7 {
++		if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != 7 {
+ 			t.Errorf("stok = %d, ingin 7 (pesanan dibayar tidak mengembalikan stok)", stok)
+ 		}
+ 		var status string
+@@ -118,9 +120,9 @@ func TestOrderCancel_HanyaPesananPending(t *testing.T) {
+ }
+ 
+ func TestOrderCancel_PesananTidakAda(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
+ 
+ 	_, err := repo.Cancel(context.Background(), 9999)
+ 
+@@ -130,17 +132,17 @@ func TestOrderCancel_PesananTidakAda(t *testing.T) {
+ }
+ 
+ func TestOrderCancel_Konkuren_StokDikembalikanSekali(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
+ 	ctx := context.Background()
+ 
+ 	const stokAwal = 10
+ 	const jumlahDipesan = 3
+ 	const pembatal = 10
+ 
+-	user := seedUser(t, db, "siti@mail.com")
+-	produk := seedProduct(t, db, "Barang Uji", 10000, stokAwal)
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++	produk := testdb.SeedProduct(t, db, "Barang Uji", 10000, stokAwal)
+ 
+ 	o, err := repo.Create(ctx, user, []domain.OrderLine{{ProductID: produk, Jumlah: jumlahDipesan}})
+ 	if err != nil {
+@@ -180,7 +182,7 @@ func TestOrderCancel_Konkuren_StokDikembalikanSekali(t *testing.T) {
+ 	if ditolak.Load() != pembatal-1 {
+ 		t.Errorf("pembatalan ditolak = %d, ingin %d", ditolak.Load(), pembatal-1)
+ 	}
+-	if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != stokAwal {
++	if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != stokAwal {
+ 		t.Errorf("stok akhir = %d, ingin %d (stok hanya boleh dikembalikan sekali)", stok, stokAwal)
+ 	}
+ }
+diff --git a/internal/adapter/repository/postgres/order/create.go b/internal/adapter/repository/postgres/order/create.go
+new file mode 100644
+index 0000000..ff75c47
+--- /dev/null
++++ b/internal/adapter/repository/postgres/order/create.go
+@@ -0,0 +1,93 @@
++package order
++
++import (
++	"context"
++	"database/sql"
++	"errors"
++	"fmt"
++
++	"toko-online/internal/domain"
++)
++
++func (r *orderPostgres) Create(ctx context.Context, userID int64, lines []domain.OrderLine) (*domain.Order, error) {
++	if len(lines) == 0 {
++		return nil, domain.ErrInvalidInput
++	}
++
++	tx, err := r.db.BeginTx(ctx, nil)
++	if err != nil {
++		return nil, fmt.Errorf("mulai transaksi: %w", err)
++	}
++	defer tx.Rollback()
++
++	items := make([]domain.OrderItem, 0, len(lines))
++	var total int64
++	for _, l := range lines {
++		item, err := reserveStock(ctx, tx, l)
++		if err != nil {
++			return nil, err
++		}
++
++		total += item.Subtotal
++		items = append(items, item)
++	}
++
++	o := &domain.Order{UserID: userID, Total: total, Items: items}
++
++	const qOrder = `
++		INSERT INTO orders (user_id, total)
++		VALUES ($1, $2)
++		RETURNING id, status, created_at`
++	if err := tx.QueryRowContext(ctx, qOrder, userID, total).Scan(&o.ID, &o.Status, &o.CreatedAt); err != nil {
++		return nil, fmt.Errorf("simpan pesanan: %w", err)
++	}
++
++	const qItem = `
++		INSERT INTO order_items (order_id, product_id, nama_produk, harga, jumlah, subtotal)
++		VALUES ($1, $2, $3, $4, $5, $6)`
++	stmt, err := tx.PrepareContext(ctx, qItem)
++	if err != nil {
++		return nil, fmt.Errorf("siapkan insert barang: %w", err)
++	}
++	defer stmt.Close()
++
++	for _, it := range items {
++		if _, err := stmt.ExecContext(ctx, o.ID, it.ProductID, it.NamaProduk, it.Harga, it.Jumlah, it.Subtotal); err != nil {
++			return nil, fmt.Errorf("simpan barang pesanan: %w", err)
++		}
++	}
++
++	if err := tx.Commit(); err != nil {
++		return nil, fmt.Errorf("commit pesanan: %w", err)
++	}
++	return o, nil
++}
++
++func reserveStock(ctx context.Context, tx *sql.Tx, l domain.OrderLine) (domain.OrderItem, error) {
++	const q = `
++		UPDATE products
++		SET stok = stok - $1, updated_at = NOW()
++		WHERE id = $2 AND stok >= $1
++		RETURNING nama, harga`
++
++	item := domain.OrderItem{ProductID: l.ProductID, Jumlah: l.Jumlah}
++
++	err := tx.QueryRowContext(ctx, q, l.Jumlah, l.ProductID).Scan(&item.NamaProduk, &item.Harga)
++	if err == nil {
++		item.Subtotal = item.Harga * int64(l.Jumlah)
++		return item, nil
++	}
++	if !errors.Is(err, sql.ErrNoRows) {
++		return item, fmt.Errorf("kurangi stok produk %d: %w", l.ProductID, err)
++	}
++
++	var ada bool
++	const qAda = `SELECT EXISTS (SELECT 1 FROM products WHERE id = $1)`
++	if err := tx.QueryRowContext(ctx, qAda, l.ProductID).Scan(&ada); err != nil {
++		return item, fmt.Errorf("cek produk %d: %w", l.ProductID, err)
++	}
++	if !ada {
++		return item, domain.ErrProductNotFound
++	}
++	return item, domain.ErrInsufficientStock
++}
+diff --git a/internal/adapter/repository/postgres/order/create_test.go b/internal/adapter/repository/postgres/order/create_test.go
+new file mode 100644
+index 0000000..5f6fb74
+--- /dev/null
++++ b/internal/adapter/repository/postgres/order/create_test.go
+@@ -0,0 +1,147 @@
++package order_test
++
++import (
++	"context"
++	"errors"
++	"sync"
++	"sync/atomic"
++	"testing"
++
++	"toko-online/internal/adapter/repository/postgres/order"
++	"toko-online/internal/adapter/repository/postgres/testdb"
++	"toko-online/internal/domain"
++)
++
++func TestOrderCreate_Sukses(t *testing.T) {
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
++	ctx := context.Background()
++
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++	kopi := testdb.SeedProduct(t, db, "Kopi", 50000, 10)
++
++	o, err := repo.Create(ctx, user, []domain.OrderLine{{ProductID: kopi, Jumlah: 3}})
++	if err != nil {
++		t.Fatalf("create gagal: %v", err)
++	}
++
++	if o.ID == 0 || o.Status != domain.OrderPending || o.UserID != user {
++		t.Errorf("pesanan tidak sesuai: %+v", o)
++	}
++	if o.Total != 150000 {
++		t.Errorf("total = %d, ingin 150000", o.Total)
++	}
++	if len(o.Items) != 1 || o.Items[0].NamaProduk != "Kopi" || o.Items[0].Harga != 50000 || o.Items[0].Subtotal != 150000 {
++		t.Errorf("barang pesanan tidak sesuai: %+v", o.Items)
++	}
++	if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, kopi); stok != 7 {
++		t.Errorf("stok = %d, ingin 7", stok)
++	}
++}
++
++func TestOrderCreate_StokKurang_SemuaDibatalkan(t *testing.T) {
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
++	ctx := context.Background()
++
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++	a := testdb.SeedProduct(t, db, "Barang A", 10000, 5) // id lebih kecil, diproses lebih dulu
++	b := testdb.SeedProduct(t, db, "Barang B", 20000, 1) // stok tidak cukup untuk 2
++
++	_, err := repo.Create(ctx, user, []domain.OrderLine{
++		{ProductID: a, Jumlah: 2},
++		{ProductID: b, Jumlah: 2},
++	})
++
++	if !errors.Is(err, domain.ErrInsufficientStock) {
++		t.Fatalf("error = %v, ingin ErrInsufficientStock", err)
++	}
++	// Inti atomisitas: pengurangan stok A (yang sudah berhasil) harus ikut dibatalkan.
++	if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, a); stok != 5 {
++		t.Errorf("stok A = %d, ingin 5 (rollback gagal)", stok)
++	}
++	if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, b); stok != 1 {
++		t.Errorf("stok B = %d, ingin 1", stok)
++	}
++	if n := testdb.Count(t, db, `SELECT count(*) FROM orders`); n != 0 {
++		t.Errorf("jumlah pesanan = %d, ingin 0", n)
++	}
++	if n := testdb.Count(t, db, `SELECT count(*) FROM order_items`); n != 0 {
++		t.Errorf("jumlah barang pesanan = %d, ingin 0", n)
++	}
++}
++
++func TestOrderCreate_ProdukTidakAda(t *testing.T) {
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
++
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++
++	_, err := repo.Create(context.Background(), user, []domain.OrderLine{{ProductID: 999, Jumlah: 1}})
++
++	if !errors.Is(err, domain.ErrProductNotFound) {
++		t.Fatalf("error = %v, ingin ErrProductNotFound", err)
++	}
++	if n := testdb.Count(t, db, `SELECT count(*) FROM orders`); n != 0 {
++		t.Errorf("jumlah pesanan = %d, ingin 0", n)
++	}
++}
++
++func TestOrderCreate_Konkuren_TidakAdaOverselling(t *testing.T) {
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
++	ctx := context.Background()
++
++	const stokAwal = 5
++	const pembeli = 20
++
++	user := testdb.SeedUser(t, db, "pembeli@mail.com")
++	langka := testdb.SeedProduct(t, db, "Barang Langka", 10000, stokAwal)
++
++	var (
++		wg        sync.WaitGroup
++		mulai     = make(chan struct{})
++		berhasil  atomic.Int64
++		kehabisan atomic.Int64
++	)
++
++	for i := 0; i < pembeli; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			<-mulai // semua goroutine menunggu aba-aba agar benar-benar berebut bersamaan
++
++			_, err := repo.Create(ctx, user, []domain.OrderLine{{ProductID: langka, Jumlah: 1}})
++			switch {
++			case err == nil:
++				berhasil.Add(1)
++			case errors.Is(err, domain.ErrInsufficientStock):
++				kehabisan.Add(1)
++			default:
++				t.Errorf("error tak terduga: %v", err)
++			}
++		}()
++	}
++	close(mulai)
++	wg.Wait()
++
++	if berhasil.Load() != stokAwal {
++		t.Errorf("pesanan berhasil = %d, ingin tepat %d", berhasil.Load(), stokAwal)
++	}
++	if kehabisan.Load() != pembeli-stokAwal {
++		t.Errorf("pesanan ditolak karena stok = %d, ingin %d", kehabisan.Load(), pembeli-stokAwal)
++	}
++	if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, langka); stok != 0 {
++		t.Errorf("stok akhir = %d, ingin 0 (tidak boleh negatif maupun tersisa)", stok)
++	}
++	if n := testdb.Count(t, db, `SELECT count(*) FROM orders`); n != stokAwal {
++		t.Errorf("jumlah pesanan tersimpan = %d, ingin %d", n, stokAwal)
++	}
++	if n := testdb.Count(t, db, `SELECT COALESCE(SUM(jumlah), 0) FROM order_items`); n != stokAwal {
++		t.Errorf("total barang terjual = %d, ingin %d", n, stokAwal)
++	}
++}
+diff --git a/internal/adapter/repository/postgres/order/expiry.go b/internal/adapter/repository/postgres/order/expiry.go
+new file mode 100644
+index 0000000..4688e33
+--- /dev/null
++++ b/internal/adapter/repository/postgres/order/expiry.go
+@@ -0,0 +1,87 @@
++package order
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"time"
++
++	"toko-online/internal/domain"
++)
++
++func (r *orderPostgres) ExpirePending(ctx context.Context, cutoff time.Time, batch int) (int, error) {
++	if batch <= 0 {
++		return 0, domain.ErrInvalidInput
++	}
++
++	const q = `
++		SELECT id FROM orders
++		WHERE status = $1 AND created_at < $2
++		ORDER BY created_at, id
++		LIMIT $3`
++	rows, err := r.db.QueryContext(ctx, q, string(domain.OrderPending), cutoff, batch)
++	if err != nil {
++		return 0, fmt.Errorf("cari pesanan kedaluwarsa: %w", err)
++	}
++	ids := make([]int64, 0, batch)
++	for rows.Next() {
++		var id int64
++		if err := rows.Scan(&id); err != nil {
++			rows.Close()
++			return 0, fmt.Errorf("scan pesanan kedaluwarsa: %w", err)
++		}
++		ids = append(ids, id)
++	}
++	if err := rows.Err(); err != nil {
++		rows.Close()
++		return 0, fmt.Errorf("iterasi pesanan kedaluwarsa: %w", err)
++	}
++	rows.Close()
++
++	var galat []error
++	kedaluwarsa := 0
++	for _, id := range ids {
++		if err := ctx.Err(); err != nil {
++			galat = append(galat, err)
++			break
++		}
++		ok, err := r.expireOne(ctx, id, cutoff)
++		if err != nil {
++			galat = append(galat, fmt.Errorf("pesanan %d: %w", id, err))
++			continue
++		}
++		if ok {
++			kedaluwarsa++
++		}
++	}
++	return kedaluwarsa, errors.Join(galat...)
++}
++
++func (r *orderPostgres) expireOne(ctx context.Context, id int64, cutoff time.Time) (bool, error) {
++	tx, err := r.db.BeginTx(ctx, nil)
++	if err != nil {
++		return false, fmt.Errorf("mulai transaksi: %w", err)
++	}
++	defer tx.Rollback()
++
++	const q = `UPDATE orders SET status = $1 WHERE id = $2 AND status = $3 AND created_at < $4`
++	res, err := tx.ExecContext(ctx, q, string(domain.OrderExpired), id, string(domain.OrderPending), cutoff)
++	if err != nil {
++		return false, fmt.Errorf("ubah status pesanan: %w", err)
++	}
++	n, err := res.RowsAffected()
++	if err != nil {
++		return false, fmt.Errorf("cek hasil ubah status: %w", err)
++	}
++	if n == 0 {
++		return false, nil
++	}
++
++	if err := kembalikanStok(ctx, tx, id); err != nil {
++		return false, err
++	}
++	if err := tx.Commit(); err != nil {
++		return false, fmt.Errorf("commit kedaluwarsa: %w", err)
++	}
++	return true, nil
++}
+diff --git a/internal/adapter/repository/postgres/order_expiry_postgres_test.go b/internal/adapter/repository/postgres/order/expiry_test.go
+similarity index 62%
+rename from internal/adapter/repository/postgres/order_expiry_postgres_test.go
+rename to internal/adapter/repository/postgres/order/expiry_test.go
+index 71bd6b2..3fc9cad 100644
+--- a/internal/adapter/repository/postgres/order_expiry_postgres_test.go
++++ b/internal/adapter/repository/postgres/order/expiry_test.go
+@@ -1,4 +1,4 @@
+-package postgres
++package order_test
+ 
+ import (
+ 	"context"
+@@ -8,6 +8,9 @@ import (
+ 	"testing"
+ 	"time"
+ 
++	"toko-online/internal/adapter/repository/postgres/order"
++	"toko-online/internal/adapter/repository/postgres/payment"
++	"toko-online/internal/adapter/repository/postgres/testdb"
+ 	"toko-online/internal/domain"
+ )
+ 
+@@ -27,14 +30,14 @@ func batasKedaluwarsa() time.Time {
+ }
+ 
+ func TestOrderExpirePending_MengembalikanStok(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
+ 	ctx := context.Background()
+ 
+-	user := seedUser(t, db, "siti@mail.com")
+-	a := seedProduct(t, db, "Barang A", 10000, 10)
+-	b := seedProduct(t, db, "Barang B", 20000, 5)
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++	a := testdb.SeedProduct(t, db, "Barang A", 10000, 10)
++	b := testdb.SeedProduct(t, db, "Barang B", 20000, 5)
+ 
+ 	lama, err := repo.Create(ctx, user, []domain.OrderLine{
+ 		{ProductID: a, Jumlah: 3},
+@@ -43,7 +46,7 @@ func TestOrderExpirePending_MengembalikanStok(t *testing.T) {
+ 	if err != nil {
+ 		t.Fatalf("setup pesanan lama gagal: %v", err)
+ 	}
+-	baru := seedPesanan(t, db, user, a, 1)
++	baru := testdb.SeedPesanan(t, db, user, a, 1)
+ 	umurkanPesanan(t, db, lama.ID, 2*time.Hour)
+ 	umurkanPesanan(t, db, baru.ID, 10*time.Minute)
+ 
+@@ -54,16 +57,16 @@ func TestOrderExpirePending_MengembalikanStok(t *testing.T) {
+ 	if n != 1 {
+ 		t.Errorf("jumlah kedaluwarsa = %d, ingin 1", n)
+ 	}
+-	if s := statusPesanan(t, db, lama.ID); s != string(domain.OrderExpired) {
++	if s := testdb.StatusPesanan(t, db, lama.ID); s != string(domain.OrderExpired) {
+ 		t.Errorf("status pesanan lama = %q, ingin %q", s, domain.OrderExpired)
+ 	}
+-	if s := statusPesanan(t, db, baru.ID); s != string(domain.OrderPending) {
++	if s := testdb.StatusPesanan(t, db, baru.ID); s != string(domain.OrderPending) {
+ 		t.Errorf("status pesanan baru = %q, ingin %q", s, domain.OrderPending)
+ 	}
+-	if stok := stokProduk(t, db, a); stok != 9 {
++	if stok := testdb.StokProduk(t, db, a); stok != 9 {
+ 		t.Errorf("stok A = %d, ingin 9", stok)
+ 	}
+-	if stok := stokProduk(t, db, b); stok != 5 {
++	if stok := testdb.StokProduk(t, db, b); stok != 5 {
+ 		t.Errorf("stok B = %d, ingin 5", stok)
+ 	}
+ 
+@@ -71,22 +74,22 @@ func TestOrderExpirePending_MengembalikanStok(t *testing.T) {
+ 	if err != nil || n != 0 {
+ 		t.Errorf("panggilan kedua: n = %d, err = %v, ingin 0 tanpa error", n, err)
+ 	}
+-	if stok := stokProduk(t, db, a); stok != 9 {
++	if stok := testdb.StokProduk(t, db, a); stok != 9 {
+ 		t.Errorf("stok A setelah panggilan kedua = %d, ingin 9 (tidak boleh dikembalikan dua kali)", stok)
+ 	}
+ }
+ 
+ func TestOrderExpirePending_HanyaPesananPending(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
+ 	ctx := context.Background()
+ 
+-	user := seedUser(t, db, "siti@mail.com")
+-	a := seedProduct(t, db, "Barang A", 10000, 10)
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++	a := testdb.SeedProduct(t, db, "Barang A", 10000, 10)
+ 
+-	lunas := seedPesanan(t, db, user, a, 1)
+-	batal := seedPesanan(t, db, user, a, 1)
++	lunas := testdb.SeedPesanan(t, db, user, a, 1)
++	batal := testdb.SeedPesanan(t, db, user, a, 1)
+ 	if _, err := repo.Cancel(ctx, batal.ID); err != nil {
+ 		t.Fatalf("setup pembatalan gagal: %v", err)
+ 	}
+@@ -103,27 +106,27 @@ func TestOrderExpirePending_HanyaPesananPending(t *testing.T) {
+ 	if n != 0 {
+ 		t.Errorf("jumlah kedaluwarsa = %d, ingin 0", n)
+ 	}
+-	if s := statusPesanan(t, db, lunas.ID); s != string(domain.OrderPaid) {
++	if s := testdb.StatusPesanan(t, db, lunas.ID); s != string(domain.OrderPaid) {
+ 		t.Errorf("status pesanan lunas = %q, ingin %q", s, domain.OrderPaid)
+ 	}
+-	if s := statusPesanan(t, db, batal.ID); s != string(domain.OrderCancelled) {
++	if s := testdb.StatusPesanan(t, db, batal.ID); s != string(domain.OrderCancelled) {
+ 		t.Errorf("status pesanan batal = %q, ingin %q", s, domain.OrderCancelled)
+ 	}
+-	if stok := stokProduk(t, db, a); stok != 9 {
++	if stok := testdb.StokProduk(t, db, a); stok != 9 {
+ 		t.Errorf("stok A = %d, ingin 9", stok)
+ 	}
+ }
+ 
+ func TestOrderExpirePending_DibatasiUkuranBatch(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
+ 	ctx := context.Background()
+ 
+-	user := seedUser(t, db, "siti@mail.com")
+-	a := seedProduct(t, db, "Barang A", 10000, 10)
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++	a := testdb.SeedProduct(t, db, "Barang A", 10000, 10)
+ 	for i := 0; i < 5; i++ {
+-		o := seedPesanan(t, db, user, a, 1)
++		o := testdb.SeedPesanan(t, db, user, a, 1)
+ 		umurkanPesanan(t, db, o.ID, 2*time.Hour)
+ 	}
+ 
+@@ -137,71 +140,71 @@ func TestOrderExpirePending_DibatasiUkuranBatch(t *testing.T) {
+ 			t.Errorf("panggilan ke-%d: n = %d, ingin %d", i+1, n, want)
+ 		}
+ 	}
+-	if stok := stokProduk(t, db, a); stok != 10 {
++	if stok := testdb.StokProduk(t, db, a); stok != 10 {
+ 		t.Errorf("stok A = %d, ingin 10", stok)
+ 	}
+-	if n := hitung(t, db, `SELECT count(*) FROM orders WHERE status = $1`, string(domain.OrderExpired)); n != 5 {
++	if n := testdb.Count(t, db, `SELECT count(*) FROM orders WHERE status = $1`, string(domain.OrderExpired)); n != 5 {
+ 		t.Errorf("jumlah pesanan expired = %d, ingin 5", n)
+ 	}
+ }
+ 
+ func TestOrderExpirePending_BatchTidakValid(t *testing.T) {
+-	db := openTestDB(t)
++	db := testdb.Open(t)
+ 
+-	_, err := NewOrderPostgres(db).ExpirePending(context.Background(), batasKedaluwarsa(), 0)
++	_, err := order.NewOrderPostgres(db).ExpirePending(context.Background(), batasKedaluwarsa(), 0)
+ 	if !errors.Is(err, domain.ErrInvalidInput) {
+ 		t.Errorf("error = %v, ingin %v", err, domain.ErrInvalidInput)
+ 	}
+ }
+ 
+ func TestOrderExpirePending_WebhookTerlambat(t *testing.T) {
+-	db := openTestDB(t)
+-	f := siapkanTagihan(t, db)
++	db := testdb.Open(t)
++	f := testdb.SiapkanTagihan(t, db)
+ 	ctx := context.Background()
+-	umurkanPesanan(t, db, f.pesanan.ID, 2*time.Hour)
++	umurkanPesanan(t, db, f.Pesanan.ID, 2*time.Hour)
+ 
+-	n, err := NewOrderPostgres(db).ExpirePending(ctx, batasKedaluwarsa(), 10)
++	n, err := order.NewOrderPostgres(db).ExpirePending(ctx, batasKedaluwarsa(), 10)
+ 	if err != nil || n != 1 {
+ 		t.Fatalf("ExpirePending: n = %d, err = %v, ingin 1 tanpa error", n, err)
+ 	}
+-	if stok := stokProduk(t, db, f.produk); stok != 10 {
++	if stok := testdb.StokProduk(t, db, f.Produk); stok != 10 {
+ 		t.Fatalf("stok setelah kedaluwarsa = %d, ingin 10", stok)
+ 	}
+ 
+-	hasil, err := NewPaymentPostgres(db).ApplyPaid(ctx, f.tagihan.Reference, f.tagihan.Amount)
++	hasil, err := payment.NewPaymentPostgres(db).ApplyPaid(ctx, f.Tagihan.Reference, f.Tagihan.Amount)
+ 	if err != nil {
+ 		t.Fatalf("ApplyPaid gagal: %v", err)
+ 	}
+ 	if hasil != domain.OutcomeRefundNeeded {
+ 		t.Errorf("hasil = %q, ingin %q", hasil, domain.OutcomeRefundNeeded)
+ 	}
+-	if s := statusPembayaran(t, db, f.tagihan.ID); s != string(domain.PaymentRefundNeeded) {
++	if s := testdb.StatusPembayaran(t, db, f.Tagihan.ID); s != string(domain.PaymentRefundNeeded) {
+ 		t.Errorf("status pembayaran = %q, ingin %q", s, domain.PaymentRefundNeeded)
+ 	}
+-	if s := statusPesanan(t, db, f.pesanan.ID); s != string(domain.OrderExpired) {
++	if s := testdb.StatusPesanan(t, db, f.Pesanan.ID); s != string(domain.OrderExpired) {
+ 		t.Errorf("status pesanan = %q, ingin %q", s, domain.OrderExpired)
+ 	}
+-	if stok := stokProduk(t, db, f.produk); stok != 10 {
++	if stok := testdb.StokProduk(t, db, f.Produk); stok != 10 {
+ 		t.Errorf("stok akhir = %d, ingin 10", stok)
+ 	}
+ }
+ 
+ func TestOrderExpirePending_Konkuren_LawanCancel(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
+ 	ctx := context.Background()
+ 
+ 	const jumlahPesanan = 20
+-	user := seedUser(t, db, "siti@mail.com")
+-	produk := seedProduct(t, db, "Barang A", 10000, jumlahPesanan)
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++	produk := testdb.SeedProduct(t, db, "Barang A", 10000, jumlahPesanan)
+ 	ids := make([]int64, 0, jumlahPesanan)
+ 	for i := 0; i < jumlahPesanan; i++ {
+-		o := seedPesanan(t, db, user, produk, 1)
++		o := testdb.SeedPesanan(t, db, user, produk, 1)
+ 		umurkanPesanan(t, db, o.ID, 2*time.Hour)
+ 		ids = append(ids, o.ID)
+ 	}
+-	if stok := stokProduk(t, db, produk); stok != 0 {
++	if stok := testdb.StokProduk(t, db, produk); stok != 0 {
+ 		t.Fatalf("stok setelah memesan = %d, ingin 0", stok)
+ 	}
+ 
+@@ -223,15 +226,15 @@ func TestOrderExpirePending_Konkuren_LawanCancel(t *testing.T) {
+ 	}
+ 	wg.Wait()
+ 
+-	if stok := stokProduk(t, db, produk); stok != jumlahPesanan {
++	if stok := testdb.StokProduk(t, db, produk); stok != jumlahPesanan {
+ 		t.Errorf("stok akhir = %d, ingin %d (stok tiap pesanan kembali tepat sekali)", stok, jumlahPesanan)
+ 	}
+-	selesai := hitung(t, db, `SELECT count(*) FROM orders WHERE status IN ($1, $2)`,
++	selesai := testdb.Count(t, db, `SELECT count(*) FROM orders WHERE status IN ($1, $2)`,
+ 		string(domain.OrderCancelled), string(domain.OrderExpired))
+ 	if selesai != jumlahPesanan {
+ 		t.Errorf("pesanan cancelled atau expired = %d, ingin %d", selesai, jumlahPesanan)
+ 	}
+-	if n := hitung(t, db, `SELECT count(*) FROM orders WHERE status = $1`, string(domain.OrderPending)); n != 0 {
++	if n := testdb.Count(t, db, `SELECT count(*) FROM orders WHERE status = $1`, string(domain.OrderPending)); n != 0 {
+ 		t.Errorf("pesanan masih pending = %d, ingin 0", n)
+ 	}
+ }
+diff --git a/internal/adapter/repository/postgres/order/order.go b/internal/adapter/repository/postgres/order/order.go
+new file mode 100644
+index 0000000..1527732
+--- /dev/null
++++ b/internal/adapter/repository/postgres/order/order.go
+@@ -0,0 +1,88 @@
++package order
++
++import (
++	"context"
++	"database/sql"
++	"errors"
++	"fmt"
++
++	"toko-online/internal/domain"
++)
++
++const orderColumns = `id, user_id, status, total, created_at`
++
++type scanner interface {
++	Scan(dest ...any) error
++}
++
++func scanOrder(s scanner, o *domain.Order) error {
++	return s.Scan(&o.ID, &o.UserID, &o.Status, &o.Total, &o.CreatedAt)
++}
++
++type orderPostgres struct {
++	db *sql.DB
++}
++
++func NewOrderPostgres(db *sql.DB) domain.OrderRepository {
++	return &orderPostgres{db: db}
++}
++
++func (r *orderPostgres) GetByID(ctx context.Context, id int64) (*domain.Order, error) {
++	const qOrder = `SELECT ` + orderColumns + ` FROM orders WHERE id = $1`
++
++	var o domain.Order
++	if err := scanOrder(r.db.QueryRowContext(ctx, qOrder, id), &o); err != nil {
++		if errors.Is(err, sql.ErrNoRows) {
++			return nil, domain.ErrOrderNotFound
++		}
++		return nil, fmt.Errorf("get pesanan: %w", err)
++	}
++
++	const qItems = `
++		SELECT product_id, nama_produk, harga, jumlah, subtotal
++		FROM order_items
++		WHERE order_id = $1
++		ORDER BY id`
++
++	rows, err := r.db.QueryContext(ctx, qItems, id)
++	if err != nil {
++		return nil, fmt.Errorf("query barang pesanan: %w", err)
++	}
++	defer rows.Close()
++
++	o.Items = make([]domain.OrderItem, 0)
++	for rows.Next() {
++		var it domain.OrderItem
++		if err := rows.Scan(&it.ProductID, &it.NamaProduk, &it.Harga, &it.Jumlah, &it.Subtotal); err != nil {
++			return nil, fmt.Errorf("scan barang pesanan: %w", err)
++		}
++		o.Items = append(o.Items, it)
++	}
++	if err := rows.Err(); err != nil {
++		return nil, fmt.Errorf("iterasi barang pesanan: %w", err)
++	}
++	return &o, nil
++}
++
++func (r *orderPostgres) ListByUser(ctx context.Context, userID int64, limit, offset int) ([]domain.Order, error) {
++	const q = `SELECT ` + orderColumns + ` FROM orders WHERE user_id = $1 ORDER BY id DESC LIMIT $2 OFFSET $3`
++
++	rows, err := r.db.QueryContext(ctx, q, userID, limit, offset)
++	if err != nil {
++		return nil, fmt.Errorf("query pesanan: %w", err)
++	}
++	defer rows.Close()
++
++	hasil := make([]domain.Order, 0, limit)
++	for rows.Next() {
++		var o domain.Order
++		if err := scanOrder(rows, &o); err != nil {
++			return nil, fmt.Errorf("scan pesanan: %w", err)
++		}
++		hasil = append(hasil, o)
++	}
++	if err := rows.Err(); err != nil {
++		return nil, fmt.Errorf("iterasi pesanan: %w", err)
++	}
++	return hasil, nil
++}
+diff --git a/internal/adapter/repository/postgres/order/order_test.go b/internal/adapter/repository/postgres/order/order_test.go
+new file mode 100644
+index 0000000..1798500
+--- /dev/null
++++ b/internal/adapter/repository/postgres/order/order_test.go
+@@ -0,0 +1,89 @@
++package order_test
++
++import (
++	"context"
++	"errors"
++	"testing"
++
++	"toko-online/internal/adapter/repository/postgres/order"
++	"toko-online/internal/adapter/repository/postgres/testdb"
++	"toko-online/internal/domain"
++)
++
++func TestOrderGetDanList(t *testing.T) {
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := order.NewOrderPostgres(db)
++	ctx := context.Background()
++
++	siti := testdb.SeedUser(t, db, "siti@mail.com")
++	andi := testdb.SeedUser(t, db, "andi@mail.com")
++	kopi := testdb.SeedProduct(t, db, "Kopi", 50000, 100)
++
++	o1, err := repo.Create(ctx, siti, []domain.OrderLine{{ProductID: kopi, Jumlah: 1}})
++	if err != nil {
++		t.Fatalf("setup gagal: %v", err)
++	}
++	o2, err := repo.Create(ctx, siti, []domain.OrderLine{{ProductID: kopi, Jumlah: 2}})
++	if err != nil {
++		t.Fatalf("setup gagal: %v", err)
++	}
++	if _, err := repo.Create(ctx, andi, []domain.OrderLine{{ProductID: kopi, Jumlah: 1}}); err != nil {
++		t.Fatalf("setup gagal: %v", err)
++	}
++
++	t.Run("detail memuat barang", func(t *testing.T) {
++		got, err := repo.GetByID(ctx, o1.ID)
++		if err != nil {
++			t.Fatalf("get gagal: %v", err)
++		}
++		if got.UserID != siti || len(got.Items) != 1 || got.Items[0].NamaProduk != "Kopi" {
++			t.Errorf("detail tidak sesuai: %+v", got)
++		}
++	})
++
++	t.Run("harga di pesanan tidak berubah saat harga produk diubah", func(t *testing.T) {
++		if _, err := db.Exec(`UPDATE products SET harga = 99999 WHERE id = $1`, kopi); err != nil {
++			t.Fatalf("ubah harga: %v", err)
++		}
++		got, err := repo.GetByID(ctx, o1.ID)
++		if err != nil {
++			t.Fatalf("get gagal: %v", err)
++		}
++		if got.Items[0].Harga != 50000 {
++			t.Errorf("harga barang = %d, ingin 50000 (snapshot)", got.Items[0].Harga)
++		}
++	})
++
++	t.Run("pesanan tidak ada", func(t *testing.T) {
++		if _, err := repo.GetByID(ctx, 9999); !errors.Is(err, domain.ErrOrderNotFound) {
++			t.Errorf("error = %v, ingin ErrOrderNotFound", err)
++		}
++	})
++
++	t.Run("daftar hanya milik sendiri, terbaru dulu, tanpa barang", func(t *testing.T) {
++		daftar, err := repo.ListByUser(ctx, siti, 10, 0)
++		if err != nil {
++			t.Fatalf("list gagal: %v", err)
++		}
++		if len(daftar) != 2 {
++			t.Fatalf("jumlah = %d, ingin 2", len(daftar))
++		}
++		if daftar[0].ID != o2.ID || daftar[1].ID != o1.ID {
++			t.Errorf("urutan = [%d, %d], ingin [%d, %d] (terbaru dulu)", daftar[0].ID, daftar[1].ID, o2.ID, o1.ID)
++		}
++		if daftar[0].Items != nil {
++			t.Error("daftar adalah ringkasan, tidak boleh memuat barang")
++		}
++	})
++
++	t.Run("paginasi", func(t *testing.T) {
++		daftar, err := repo.ListByUser(ctx, siti, 1, 1)
++		if err != nil {
++			t.Fatalf("list gagal: %v", err)
++		}
++		if len(daftar) != 1 || daftar[0].ID != o1.ID {
++			t.Errorf("halaman ke-2 = %+v, ingin hanya pesanan %d", daftar, o1.ID)
++		}
++	})
++}
+diff --git a/internal/adapter/repository/postgres/order_postgres.go b/internal/adapter/repository/postgres/order_postgres.go
+deleted file mode 100644
+index c210882..0000000
+--- a/internal/adapter/repository/postgres/order_postgres.go
++++ /dev/null
+@@ -1,340 +0,0 @@
+-package postgres
+-
+-import (
+-	"context"
+-	"database/sql"
+-	"errors"
+-	"fmt"
+-	"time"
+-
+-	"toko-online/internal/domain"
+-)
+-
+-const orderColumns = `id, user_id, status, total, created_at`
+-
+-func scanOrder(s scanner, o *domain.Order) error {
+-	return s.Scan(&o.ID, &o.UserID, &o.Status, &o.Total, &o.CreatedAt)
+-}
+-
+-type orderPostgres struct {
+-	db *sql.DB
+-}
+-
+-func NewOrderPostgres(db *sql.DB) domain.OrderRepository {
+-	return &orderPostgres{db: db}
+-}
+-
+-func (r *orderPostgres) Create(ctx context.Context, userID int64, lines []domain.OrderLine) (*domain.Order, error) {
+-	if len(lines) == 0 {
+-		return nil, domain.ErrInvalidInput
+-	}
+-
+-	tx, err := r.db.BeginTx(ctx, nil)
+-	if err != nil {
+-		return nil, fmt.Errorf("mulai transaksi: %w", err)
+-	}
+-	defer tx.Rollback()
+-
+-	items := make([]domain.OrderItem, 0, len(lines))
+-	var total int64
+-	for _, l := range lines {
+-		item, err := reserveStock(ctx, tx, l)
+-		if err != nil {
+-			return nil, err
+-		}
+-
+-		total += item.Subtotal
+-		items = append(items, item)
+-	}
+-
+-	o := &domain.Order{UserID: userID, Total: total, Items: items}
+-
+-	const qOrder = `
+-		INSERT INTO orders (user_id, total)
+-		VALUES ($1, $2)
+-		RETURNING id, status, created_at`
+-	if err := tx.QueryRowContext(ctx, qOrder, userID, total).Scan(&o.ID, &o.Status, &o.CreatedAt); err != nil {
+-		return nil, fmt.Errorf("simpan pesanan: %w", err)
+-	}
+-
+-	const qItem = `
+-		INSERT INTO order_items (order_id, product_id, nama_produk, harga, jumlah, subtotal)
+-		VALUES ($1, $2, $3, $4, $5, $6)`
+-	stmt, err := tx.PrepareContext(ctx, qItem)
+-	if err != nil {
+-		return nil, fmt.Errorf("siapkan insert barang: %w", err)
+-	}
+-	defer stmt.Close()
+-
+-	for _, it := range items {
+-		if _, err := stmt.ExecContext(ctx, o.ID, it.ProductID, it.NamaProduk, it.Harga, it.Jumlah, it.Subtotal); err != nil {
+-			return nil, fmt.Errorf("simpan barang pesanan: %w", err)
+-		}
+-	}
+-
+-	if err := tx.Commit(); err != nil {
+-		return nil, fmt.Errorf("commit pesanan: %w", err)
+-	}
+-	return o, nil
+-}
+-
+-func reserveStock(ctx context.Context, tx *sql.Tx, l domain.OrderLine) (domain.OrderItem, error) {
+-	const q = `
+-		UPDATE products
+-		SET stok = stok - $1, updated_at = NOW()
+-		WHERE id = $2 AND stok >= $1
+-		RETURNING nama, harga`
+-
+-	item := domain.OrderItem{ProductID: l.ProductID, Jumlah: l.Jumlah}
+-
+-	err := tx.QueryRowContext(ctx, q, l.Jumlah, l.ProductID).Scan(&item.NamaProduk, &item.Harga)
+-	if err == nil {
+-		item.Subtotal = item.Harga * int64(l.Jumlah)
+-		return item, nil
+-	}
+-	if !errors.Is(err, sql.ErrNoRows) {
+-		return item, fmt.Errorf("kurangi stok produk %d: %w", l.ProductID, err)
+-	}
+-
+-	var ada bool
+-	const qAda = `SELECT EXISTS (SELECT 1 FROM products WHERE id = $1)`
+-	if err := tx.QueryRowContext(ctx, qAda, l.ProductID).Scan(&ada); err != nil {
+-		return item, fmt.Errorf("cek produk %d: %w", l.ProductID, err)
+-	}
+-	if !ada {
+-		return item, domain.ErrProductNotFound
+-	}
+-	return item, domain.ErrInsufficientStock
+-}
+-
+-func (r *orderPostgres) GetByID(ctx context.Context, id int64) (*domain.Order, error) {
+-	const qOrder = `SELECT ` + orderColumns + ` FROM orders WHERE id = $1`
+-
+-	var o domain.Order
+-	if err := scanOrder(r.db.QueryRowContext(ctx, qOrder, id), &o); err != nil {
+-		if errors.Is(err, sql.ErrNoRows) {
+-			return nil, domain.ErrOrderNotFound
+-		}
+-		return nil, fmt.Errorf("get pesanan: %w", err)
+-	}
+-
+-	const qItems = `
+-		SELECT product_id, nama_produk, harga, jumlah, subtotal
+-		FROM order_items
+-		WHERE order_id = $1
+-		ORDER BY id`
+-
+-	rows, err := r.db.QueryContext(ctx, qItems, id)
+-	if err != nil {
+-		return nil, fmt.Errorf("query barang pesanan: %w", err)
+-	}
+-	defer rows.Close()
+-
+-	o.Items = make([]domain.OrderItem, 0)
+-	for rows.Next() {
+-		var it domain.OrderItem
+-		if err := rows.Scan(&it.ProductID, &it.NamaProduk, &it.Harga, &it.Jumlah, &it.Subtotal); err != nil {
+-			return nil, fmt.Errorf("scan barang pesanan: %w", err)
+-		}
+-		o.Items = append(o.Items, it)
+-	}
+-	if err := rows.Err(); err != nil {
+-		return nil, fmt.Errorf("iterasi barang pesanan: %w", err)
+-	}
+-	return &o, nil
+-}
+-
+-func (r *orderPostgres) ListByUser(ctx context.Context, userID int64, limit, offset int) ([]domain.Order, error) {
+-	const q = `SELECT ` + orderColumns + ` FROM orders WHERE user_id = $1 ORDER BY id DESC LIMIT $2 OFFSET $3`
+-
+-	rows, err := r.db.QueryContext(ctx, q, userID, limit, offset)
+-	if err != nil {
+-		return nil, fmt.Errorf("query pesanan: %w", err)
+-	}
+-	defer rows.Close()
+-
+-	hasil := make([]domain.Order, 0, limit)
+-	for rows.Next() {
+-		var o domain.Order
+-		if err := scanOrder(rows, &o); err != nil {
+-			return nil, fmt.Errorf("scan pesanan: %w", err)
+-		}
+-		hasil = append(hasil, o)
+-	}
+-	if err := rows.Err(); err != nil {
+-		return nil, fmt.Errorf("iterasi pesanan: %w", err)
+-	}
+-	return hasil, nil
+-}
+-
+-type stokKembali struct {
+-	productID int64
+-	jumlah    int64
+-}
+-
+-func (r *orderPostgres) Cancel(ctx context.Context, id int64) (*domain.Order, error) {
+-	tx, err := r.db.BeginTx(ctx, nil)
+-	if err != nil {
+-		return nil, fmt.Errorf("mulai transaksi: %w", err)
+-	}
+-	defer tx.Rollback()
+-
+-	const qStatus = `UPDATE orders SET status = $1 WHERE id = $2 AND status = $3`
+-	res, err := tx.ExecContext(ctx, qStatus, string(domain.OrderCancelled), id, string(domain.OrderPending))
+-	if err != nil {
+-		return nil, fmt.Errorf("ubah status pesanan: %w", err)
+-	}
+-	n, err := res.RowsAffected()
+-	if err != nil {
+-		return nil, fmt.Errorf("cek hasil ubah status: %w", err)
+-	}
+-	if n == 0 {
+-		// Tidak ada baris yang cocok: pesanannya tidak ada, atau statusnya bukan pending.
+-		var ada bool
+-		const qAda = `SELECT EXISTS (SELECT 1 FROM orders WHERE id = $1)`
+-		if err := tx.QueryRowContext(ctx, qAda, id).Scan(&ada); err != nil {
+-			return nil, fmt.Errorf("cek pesanan: %w", err)
+-		}
+-		if !ada {
+-			return nil, domain.ErrOrderNotFound
+-		}
+-		return nil, domain.ErrOrderNotCancellable
+-	}
+-
+-	if err := kembalikanStok(ctx, tx, id); err != nil {
+-		return nil, err
+-	}
+-
+-	if err := tx.Commit(); err != nil {
+-		return nil, fmt.Errorf("commit pembatalan: %w", err)
+-	}
+-
+-	return r.GetByID(ctx, id)
+-}
+-
+-func barangYangDikembalikan(ctx context.Context, tx *sql.Tx, orderID int64) ([]stokKembali, error) {
+-	const q = `
+-		SELECT product_id, SUM(jumlah)
+-		FROM order_items
+-		WHERE order_id = $1
+-		GROUP BY product_id
+-		ORDER BY product_id`
+-
+-	rows, err := tx.QueryContext(ctx, q, orderID)
+-	if err != nil {
+-		return nil, fmt.Errorf("query barang pesanan: %w", err)
+-	}
+-	defer rows.Close()
+-
+-	var hasil []stokKembali
+-	for rows.Next() {
+-		var b stokKembali
+-		if err := rows.Scan(&b.productID, &b.jumlah); err != nil {
+-			return nil, fmt.Errorf("scan barang pesanan: %w", err)
+-		}
+-		hasil = append(hasil, b)
+-	}
+-	if err := rows.Err(); err != nil {
+-		return nil, fmt.Errorf("iterasi barang pesanan: %w", err)
+-	}
+-	return hasil, nil
+-}
+-func kembalikanStok(ctx context.Context, tx *sql.Tx, orderID int64) error {
+-	kembali, err := barangYangDikembalikan(ctx, tx, orderID)
+-	if err != nil {
+-		return err
+-	}
+-
+-	const q = `UPDATE products SET stok = stok + $1, updated_at = NOW() WHERE id = $2`
+-	for _, b := range kembali {
+-		res, err := tx.ExecContext(ctx, q, b.jumlah, b.productID)
+-		if err != nil {
+-			return fmt.Errorf("kembalikan stok produk %d: %w", b.productID, err)
+-		}
+-		n, err := res.RowsAffected()
+-		if err != nil {
+-			return fmt.Errorf("cek hasil kembalikan stok produk %d: %w", b.productID, err)
+-		}
+-		if n != 1 {
+-			return fmt.Errorf("produk %d tidak ditemukan saat mengembalikan stok", b.productID)
+-		}
+-	}
+-	return nil
+-}
+-
+-func (r *orderPostgres) ExpirePending(ctx context.Context, cutoff time.Time, batch int) (int, error) {
+-	if batch <= 0 {
+-		return 0, domain.ErrInvalidInput
+-	}
+-
+-	const q = `
+-		SELECT id FROM orders
+-		WHERE status = $1 AND created_at < $2
+-		ORDER BY created_at, id
+-		LIMIT $3`
+-	rows, err := r.db.QueryContext(ctx, q, string(domain.OrderPending), cutoff, batch)
+-	if err != nil {
+-		return 0, fmt.Errorf("cari pesanan kedaluwarsa: %w", err)
+-	}
+-	ids := make([]int64, 0, batch)
+-	for rows.Next() {
+-		var id int64
+-		if err := rows.Scan(&id); err != nil {
+-			rows.Close()
+-			return 0, fmt.Errorf("scan pesanan kedaluwarsa: %w", err)
+-		}
+-		ids = append(ids, id)
+-	}
+-	if err := rows.Err(); err != nil {
+-		rows.Close()
+-		return 0, fmt.Errorf("iterasi pesanan kedaluwarsa: %w", err)
+-	}
+-	rows.Close()
+-
+-	var galat []error
+-	kedaluwarsa := 0
+-	for _, id := range ids {
+-		if err := ctx.Err(); err != nil {
+-			galat = append(galat, err)
+-			break
+-		}
+-		ok, err := r.expireOne(ctx, id, cutoff)
+-		if err != nil {
+-			galat = append(galat, fmt.Errorf("pesanan %d: %w", id, err))
+-			continue
+-		}
+-		if ok {
+-			kedaluwarsa++
+-		}
+-	}
+-	return kedaluwarsa, errors.Join(galat...)
+-}
+-
+-func (r *orderPostgres) expireOne(ctx context.Context, id int64, cutoff time.Time) (bool, error) {
+-	tx, err := r.db.BeginTx(ctx, nil)
+-	if err != nil {
+-		return false, fmt.Errorf("mulai transaksi: %w", err)
+-	}
+-	defer tx.Rollback()
+-
+-	const q = `UPDATE orders SET status = $1 WHERE id = $2 AND status = $3 AND created_at < $4`
+-	res, err := tx.ExecContext(ctx, q, string(domain.OrderExpired), id, string(domain.OrderPending), cutoff)
+-	if err != nil {
+-		return false, fmt.Errorf("ubah status pesanan: %w", err)
+-	}
+-	n, err := res.RowsAffected()
+-	if err != nil {
+-		return false, fmt.Errorf("cek hasil ubah status: %w", err)
+-	}
+-	if n == 0 {
+-		return false, nil
+-	}
+-
+-	if err := kembalikanStok(ctx, tx, id); err != nil {
+-		return false, err
+-	}
+-	if err := tx.Commit(); err != nil {
+-		return false, fmt.Errorf("commit kedaluwarsa: %w", err)
+-	}
+-	return true, nil
+-}
+diff --git a/internal/adapter/repository/postgres/order_postgres_test.go b/internal/adapter/repository/postgres/order_postgres_test.go
+deleted file mode 100644
+index 3758ab6..0000000
+--- a/internal/adapter/repository/postgres/order_postgres_test.go
++++ /dev/null
+@@ -1,223 +0,0 @@
+-package postgres
+-
+-import (
+-	"context"
+-	"errors"
+-	"sync"
+-	"sync/atomic"
+-	"testing"
+-
+-	"toko-online/internal/domain"
+-)
+-
+-func TestOrderCreate_Sukses(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
+-	ctx := context.Background()
+-
+-	user := seedUser(t, db, "siti@mail.com")
+-	kopi := seedProduct(t, db, "Kopi", 50000, 10)
+-
+-	o, err := repo.Create(ctx, user, []domain.OrderLine{{ProductID: kopi, Jumlah: 3}})
+-	if err != nil {
+-		t.Fatalf("create gagal: %v", err)
+-	}
+-
+-	if o.ID == 0 || o.Status != domain.OrderPending || o.UserID != user {
+-		t.Errorf("pesanan tidak sesuai: %+v", o)
+-	}
+-	if o.Total != 150000 {
+-		t.Errorf("total = %d, ingin 150000", o.Total)
+-	}
+-	if len(o.Items) != 1 || o.Items[0].NamaProduk != "Kopi" || o.Items[0].Harga != 50000 || o.Items[0].Subtotal != 150000 {
+-		t.Errorf("barang pesanan tidak sesuai: %+v", o.Items)
+-	}
+-	if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, kopi); stok != 7 {
+-		t.Errorf("stok = %d, ingin 7", stok)
+-	}
+-}
+-
+-func TestOrderCreate_StokKurang_SemuaDibatalkan(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
+-	ctx := context.Background()
+-
+-	user := seedUser(t, db, "siti@mail.com")
+-	a := seedProduct(t, db, "Barang A", 10000, 5) // id lebih kecil, diproses lebih dulu
+-	b := seedProduct(t, db, "Barang B", 20000, 1) // stok tidak cukup untuk 2
+-
+-	_, err := repo.Create(ctx, user, []domain.OrderLine{
+-		{ProductID: a, Jumlah: 2},
+-		{ProductID: b, Jumlah: 2},
+-	})
+-
+-	if !errors.Is(err, domain.ErrInsufficientStock) {
+-		t.Fatalf("error = %v, ingin ErrInsufficientStock", err)
+-	}
+-	// Inti atomisitas: pengurangan stok A (yang sudah berhasil) harus ikut dibatalkan.
+-	if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, a); stok != 5 {
+-		t.Errorf("stok A = %d, ingin 5 (rollback gagal)", stok)
+-	}
+-	if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, b); stok != 1 {
+-		t.Errorf("stok B = %d, ingin 1", stok)
+-	}
+-	if n := hitung(t, db, `SELECT count(*) FROM orders`); n != 0 {
+-		t.Errorf("jumlah pesanan = %d, ingin 0", n)
+-	}
+-	if n := hitung(t, db, `SELECT count(*) FROM order_items`); n != 0 {
+-		t.Errorf("jumlah barang pesanan = %d, ingin 0", n)
+-	}
+-}
+-
+-func TestOrderCreate_ProdukTidakAda(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
+-
+-	user := seedUser(t, db, "siti@mail.com")
+-
+-	_, err := repo.Create(context.Background(), user, []domain.OrderLine{{ProductID: 999, Jumlah: 1}})
+-
+-	if !errors.Is(err, domain.ErrProductNotFound) {
+-		t.Fatalf("error = %v, ingin ErrProductNotFound", err)
+-	}
+-	if n := hitung(t, db, `SELECT count(*) FROM orders`); n != 0 {
+-		t.Errorf("jumlah pesanan = %d, ingin 0", n)
+-	}
+-}
+-
+-func TestOrderCreate_Konkuren_TidakAdaOverselling(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
+-	ctx := context.Background()
+-
+-	const stokAwal = 5
+-	const pembeli = 20
+-
+-	user := seedUser(t, db, "pembeli@mail.com")
+-	langka := seedProduct(t, db, "Barang Langka", 10000, stokAwal)
+-
+-	var (
+-		wg        sync.WaitGroup
+-		mulai     = make(chan struct{})
+-		berhasil  atomic.Int64
+-		kehabisan atomic.Int64
+-	)
+-
+-	for i := 0; i < pembeli; i++ {
+-		wg.Add(1)
+-		go func() {
+-			defer wg.Done()
+-			<-mulai // semua goroutine menunggu aba-aba agar benar-benar berebut bersamaan
+-
+-			_, err := repo.Create(ctx, user, []domain.OrderLine{{ProductID: langka, Jumlah: 1}})
+-			switch {
+-			case err == nil:
+-				berhasil.Add(1)
+-			case errors.Is(err, domain.ErrInsufficientStock):
+-				kehabisan.Add(1)
+-			default:
+-				t.Errorf("error tak terduga: %v", err)
+-			}
+-		}()
+-	}
+-	close(mulai)
+-	wg.Wait()
+-
+-	if berhasil.Load() != stokAwal {
+-		t.Errorf("pesanan berhasil = %d, ingin tepat %d", berhasil.Load(), stokAwal)
+-	}
+-	if kehabisan.Load() != pembeli-stokAwal {
+-		t.Errorf("pesanan ditolak karena stok = %d, ingin %d", kehabisan.Load(), pembeli-stokAwal)
+-	}
+-	if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, langka); stok != 0 {
+-		t.Errorf("stok akhir = %d, ingin 0 (tidak boleh negatif maupun tersisa)", stok)
+-	}
+-	if n := hitung(t, db, `SELECT count(*) FROM orders`); n != stokAwal {
+-		t.Errorf("jumlah pesanan tersimpan = %d, ingin %d", n, stokAwal)
+-	}
+-	if n := hitung(t, db, `SELECT COALESCE(SUM(jumlah), 0) FROM order_items`); n != stokAwal {
+-		t.Errorf("total barang terjual = %d, ingin %d", n, stokAwal)
+-	}
+-}
+-
+-func TestOrderGetDanList(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewOrderPostgres(db)
+-	ctx := context.Background()
+-
+-	siti := seedUser(t, db, "siti@mail.com")
+-	andi := seedUser(t, db, "andi@mail.com")
+-	kopi := seedProduct(t, db, "Kopi", 50000, 100)
+-
+-	o1, err := repo.Create(ctx, siti, []domain.OrderLine{{ProductID: kopi, Jumlah: 1}})
+-	if err != nil {
+-		t.Fatalf("setup gagal: %v", err)
+-	}
+-	o2, err := repo.Create(ctx, siti, []domain.OrderLine{{ProductID: kopi, Jumlah: 2}})
+-	if err != nil {
+-		t.Fatalf("setup gagal: %v", err)
+-	}
+-	if _, err := repo.Create(ctx, andi, []domain.OrderLine{{ProductID: kopi, Jumlah: 1}}); err != nil {
+-		t.Fatalf("setup gagal: %v", err)
+-	}
+-
+-	t.Run("detail memuat barang", func(t *testing.T) {
+-		got, err := repo.GetByID(ctx, o1.ID)
+-		if err != nil {
+-			t.Fatalf("get gagal: %v", err)
+-		}
+-		if got.UserID != siti || len(got.Items) != 1 || got.Items[0].NamaProduk != "Kopi" {
+-			t.Errorf("detail tidak sesuai: %+v", got)
+-		}
+-	})
+-
+-	t.Run("harga di pesanan tidak berubah saat harga produk diubah", func(t *testing.T) {
+-		if _, err := db.Exec(`UPDATE products SET harga = 99999 WHERE id = $1`, kopi); err != nil {
+-			t.Fatalf("ubah harga: %v", err)
+-		}
+-		got, err := repo.GetByID(ctx, o1.ID)
+-		if err != nil {
+-			t.Fatalf("get gagal: %v", err)
+-		}
+-		if got.Items[0].Harga != 50000 {
+-			t.Errorf("harga barang = %d, ingin 50000 (snapshot)", got.Items[0].Harga)
+-		}
+-	})
+-
+-	t.Run("pesanan tidak ada", func(t *testing.T) {
+-		if _, err := repo.GetByID(ctx, 9999); !errors.Is(err, domain.ErrOrderNotFound) {
+-			t.Errorf("error = %v, ingin ErrOrderNotFound", err)
+-		}
+-	})
+-
+-	t.Run("daftar hanya milik sendiri, terbaru dulu, tanpa barang", func(t *testing.T) {
+-		daftar, err := repo.ListByUser(ctx, siti, 10, 0)
+-		if err != nil {
+-			t.Fatalf("list gagal: %v", err)
+-		}
+-		if len(daftar) != 2 {
+-			t.Fatalf("jumlah = %d, ingin 2", len(daftar))
+-		}
+-		if daftar[0].ID != o2.ID || daftar[1].ID != o1.ID {
+-			t.Errorf("urutan = [%d, %d], ingin [%d, %d] (terbaru dulu)", daftar[0].ID, daftar[1].ID, o2.ID, o1.ID)
+-		}
+-		if daftar[0].Items != nil {
+-			t.Error("daftar adalah ringkasan, tidak boleh memuat barang")
+-		}
+-	})
+-
+-	t.Run("paginasi", func(t *testing.T) {
+-		daftar, err := repo.ListByUser(ctx, siti, 1, 1)
+-		if err != nil {
+-			t.Fatalf("list gagal: %v", err)
+-		}
+-		if len(daftar) != 1 || daftar[0].ID != o1.ID {
+-			t.Errorf("halaman ke-2 = %+v, ingin hanya pesanan %d", daftar, o1.ID)
+-		}
+-	})
+-}
+diff --git a/internal/adapter/repository/postgres/payment/apply_paid_konkuren_test.go b/internal/adapter/repository/postgres/payment/apply_paid_konkuren_test.go
+new file mode 100644
+index 0000000..4775971
+--- /dev/null
++++ b/internal/adapter/repository/postgres/payment/apply_paid_konkuren_test.go
+@@ -0,0 +1,142 @@
++package payment_test
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"sync"
++	"sync/atomic"
++	"testing"
++
++	"toko-online/internal/adapter/repository/postgres/order"
++	"toko-online/internal/adapter/repository/postgres/payment"
++	"toko-online/internal/adapter/repository/postgres/testdb"
++	"toko-online/internal/domain"
++)
++
++func TestPaymentApplyPaid_Konkuren_WebhookDuplikat(t *testing.T) {
++	db := testdb.Open(t)
++	f := testdb.SiapkanTagihan(t, db)
++	repo := payment.NewPaymentPostgres(db)
++	ctx := context.Background()
++
++	const pengiriman = 10
++	var (
++		wg      sync.WaitGroup
++		mulai   = make(chan struct{})
++		dibayar atomic.Int64
++		sudah   atomic.Int64
++	)
++
++	for i := 0; i < pengiriman; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			<-mulai
++
++			hasil, err := repo.ApplyPaid(ctx, f.Tagihan.Reference, 150000)
++			switch {
++			case err != nil:
++				t.Errorf("error tak terduga: %v", err)
++			case hasil == domain.OutcomePaid:
++				dibayar.Add(1)
++			case hasil == domain.OutcomeAlreadyPaid:
++				sudah.Add(1)
++			default:
++				t.Errorf("hasil tak terduga: %q", hasil)
++			}
++		}()
++	}
++	close(mulai)
++	wg.Wait()
++
++	if dibayar.Load() != 1 {
++		t.Errorf("diproses sebagai lunas = %d kali, ingin tepat 1", dibayar.Load())
++	}
++	if sudah.Load() != pengiriman-1 {
++		t.Errorf("dijawab sudah lunas = %d kali, ingin %d", sudah.Load(), pengiriman-1)
++	}
++	if s := testdb.StatusPesanan(t, db, f.Pesanan.ID); s != "paid" {
++		t.Errorf("status pesanan = %q, ingin paid", s)
++	}
++}
++
++func TestPaymentApplyPaid_Balapan_BayarLawanBatal(t *testing.T) {
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	orders := order.NewOrderPostgres(db)
++	payments := payment.NewPaymentPostgres(db)
++	ctx := context.Background()
++
++	const putaran = 30
++	const stokAwal = 100
++
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++	produk := testdb.SeedProduct(t, db, "Barang Balapan", 10000, stokAwal)
++
++	lunas := 0
++	for i := 0; i < putaran; i++ {
++		o := testdb.SeedPesanan(t, db, user, produk, 1)
++		ref := fmt.Sprintf("SIM-balapan-%d", i)
++		p, err := payments.CreatePending(ctx, o.ID, ref)
++		if err != nil {
++			t.Fatalf("putaran %d: setup tagihan gagal: %v", i, err)
++		}
++
++		var (
++			wg         sync.WaitGroup
++			mulai      = make(chan struct{})
++			hasilBayar domain.PaymentOutcome
++			errBayar   error
++			errBatal   error
++		)
++		wg.Add(2)
++		go func() {
++			defer wg.Done()
++			<-mulai
++			hasilBayar, errBayar = payments.ApplyPaid(ctx, ref, o.Total)
++		}()
++		go func() {
++			defer wg.Done()
++			<-mulai
++			_, errBatal = orders.Cancel(ctx, o.ID)
++		}()
++		close(mulai)
++		wg.Wait()
++
++		if errBayar != nil {
++			t.Fatalf("putaran %d: ApplyPaid gagal: %v", i, errBayar)
++		}
++
++		switch hasilBayar {
++		case domain.OutcomePaid:
++			lunas++
++			if !errors.Is(errBatal, domain.ErrOrderNotCancellable) {
++				t.Errorf("putaran %d: pembayaran menang, pembatalan seharusnya ErrOrderNotCancellable, dapat %v", i, errBatal)
++			}
++			if s := testdb.StatusPesanan(t, db, o.ID); s != "paid" {
++				t.Errorf("putaran %d: status pesanan = %q, ingin paid", i, s)
++			}
++			if s := testdb.StatusPembayaran(t, db, p.ID); s != "paid" {
++				t.Errorf("putaran %d: status pembayaran = %q, ingin paid", i, s)
++			}
++		case domain.OutcomeRefundNeeded:
++			if errBatal != nil {
++				t.Errorf("putaran %d: pembatalan menang, seharusnya berhasil, dapat %v", i, errBatal)
++			}
++			if s := testdb.StatusPesanan(t, db, o.ID); s != "cancelled" {
++				t.Errorf("putaran %d: status pesanan = %q, ingin cancelled", i, s)
++			}
++			if s := testdb.StatusPembayaran(t, db, p.ID); s != "refund_needed" {
++				t.Errorf("putaran %d: status pembayaran = %q, ingin refund_needed", i, s)
++			}
++		default:
++			t.Fatalf("putaran %d: hasil tak terduga %q", i, hasilBayar)
++		}
++	}
++
++	if stok := testdb.StokProduk(t, db, produk); stok != int64(stokAwal-lunas) {
++		t.Errorf("stok akhir = %d, ingin %d (stok awal %d dikurangi %d pesanan lunas)", stok, stokAwal-lunas, stokAwal, lunas)
++	}
++	t.Logf("dari %d putaran: %d pembayaran menang, %d pembatalan menang", putaran, lunas, putaran-lunas)
++}
+diff --git a/internal/adapter/repository/postgres/payment/apply_paid_test.go b/internal/adapter/repository/postgres/payment/apply_paid_test.go
+new file mode 100644
+index 0000000..9ee8e18
+--- /dev/null
++++ b/internal/adapter/repository/postgres/payment/apply_paid_test.go
+@@ -0,0 +1,127 @@
++package payment_test
++
++import (
++	"context"
++	"errors"
++	"testing"
++
++	"toko-online/internal/adapter/repository/postgres/order"
++	"toko-online/internal/adapter/repository/postgres/payment"
++	"toko-online/internal/adapter/repository/postgres/testdb"
++	"toko-online/internal/domain"
++)
++
++func TestPaymentApplyPaid_Sukses(t *testing.T) {
++	db := testdb.Open(t)
++	f := testdb.SiapkanTagihan(t, db)
++	repo := payment.NewPaymentPostgres(db)
++
++	hasil, err := repo.ApplyPaid(context.Background(), f.Tagihan.Reference, 150000)
++
++	if err != nil {
++		t.Fatalf("apply gagal: %v", err)
++	}
++	if hasil != domain.OutcomePaid {
++		t.Errorf("hasil = %q, ingin %q", hasil, domain.OutcomePaid)
++	}
++	if s := testdb.StatusPesanan(t, db, f.Pesanan.ID); s != "paid" {
++		t.Errorf("status pesanan = %q, ingin paid", s)
++	}
++	if s := testdb.StatusPembayaran(t, db, f.Tagihan.ID); s != "paid" {
++		t.Errorf("status pembayaran = %q, ingin paid", s)
++	}
++	if n := testdb.Count(t, db, `SELECT count(*) FROM payments WHERE id = $1 AND paid_at IS NOT NULL`, f.Tagihan.ID); n != 1 {
++		t.Error("paid_at harus terisi")
++	}
++	if stok := testdb.StokProduk(t, db, f.Produk); stok != 7 {
++		t.Errorf("stok = %d, ingin 7 (pesanan lunas tidak mengubah stok)", stok)
++	}
++}
++
++func TestPaymentApplyPaid_Idempoten(t *testing.T) {
++	db := testdb.Open(t)
++	f := testdb.SiapkanTagihan(t, db)
++	repo := payment.NewPaymentPostgres(db)
++	ctx := context.Background()
++
++	pertama, err := repo.ApplyPaid(ctx, f.Tagihan.Reference, 150000)
++	if err != nil {
++		t.Fatalf("apply pertama gagal: %v", err)
++	}
++	kedua, err := repo.ApplyPaid(ctx, f.Tagihan.Reference, 150000)
++	if err != nil {
++		t.Fatalf("apply kedua gagal: %v", err)
++	}
++
++	if pertama != domain.OutcomePaid || kedua != domain.OutcomeAlreadyPaid {
++		t.Errorf("hasil = (%q, %q), ingin (%q, %q)", pertama, kedua, domain.OutcomePaid, domain.OutcomeAlreadyPaid)
++	}
++	if s := testdb.StatusPesanan(t, db, f.Pesanan.ID); s != "paid" {
++		t.Errorf("status pesanan = %q, ingin paid", s)
++	}
++}
++
++func TestPaymentApplyPaid_JumlahTidakSesuai(t *testing.T) {
++	db := testdb.Open(t)
++	f := testdb.SiapkanTagihan(t, db)
++	repo := payment.NewPaymentPostgres(db)
++
++	_, err := repo.ApplyPaid(context.Background(), f.Tagihan.Reference, 149999)
++
++	if !errors.Is(err, domain.ErrAmountMismatch) {
++		t.Fatalf("error = %v, ingin ErrAmountMismatch", err)
++	}
++	if s := testdb.StatusPesanan(t, db, f.Pesanan.ID); s != "pending" {
++		t.Errorf("status pesanan = %q, ingin tetap pending", s)
++	}
++	if s := testdb.StatusPembayaran(t, db, f.Tagihan.ID); s != "pending" {
++		t.Errorf("status pembayaran = %q, ingin tetap pending", s)
++	}
++}
++
++func TestPaymentApplyPaid_ReferensiTidakAda(t *testing.T) {
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := payment.NewPaymentPostgres(db)
++
++	_, err := repo.ApplyPaid(context.Background(), "SIM-tidak-ada", 1000)
++
++	if !errors.Is(err, domain.ErrPaymentNotFound) {
++		t.Fatalf("error = %v, ingin ErrPaymentNotFound", err)
++	}
++}
++
++func TestPaymentApplyPaid_Terlambat(t *testing.T) {
++	db := testdb.Open(t)
++	f := testdb.SiapkanTagihan(t, db)
++	repo := payment.NewPaymentPostgres(db)
++	ctx := context.Background()
++
++	if _, err := order.NewOrderPostgres(db).Cancel(ctx, f.Pesanan.ID); err != nil {
++		t.Fatalf("setup: batalkan pesanan gagal: %v", err)
++	}
++
++	hasil, err := repo.ApplyPaid(ctx, f.Tagihan.Reference, 150000)
++
++	if err != nil {
++		t.Fatalf("apply gagal: %v", err)
++	}
++	if hasil != domain.OutcomeRefundNeeded {
++		t.Errorf("hasil = %q, ingin %q", hasil, domain.OutcomeRefundNeeded)
++	}
++	if s := testdb.StatusPesanan(t, db, f.Pesanan.ID); s != "cancelled" {
++		t.Errorf("status pesanan = %q, ingin tetap cancelled", s)
++	}
++	if s := testdb.StatusPembayaran(t, db, f.Tagihan.ID); s != "refund_needed" {
++		t.Errorf("status pembayaran = %q, ingin refund_needed", s)
++	}
++	if stok := testdb.StokProduk(t, db, f.Produk); stok != 10 {
++		t.Errorf("stok = %d, ingin 10 (sudah dikembalikan oleh pembatalan, dan pembayaran tidak mengubahnya)", stok)
++	}
++
++	// Webhook ulang untuk kasus ini tetap dijawab sama dan tidak mengubah apa pun.
++	ulang, err := repo.ApplyPaid(ctx, f.Tagihan.Reference, 150000)
++	if err != nil || ulang != domain.OutcomeRefundNeeded {
++		t.Errorf("webhook ulang: hasil=%q error=%v, ingin %q", ulang, err, domain.OutcomeRefundNeeded)
++	}
++}
+diff --git a/internal/adapter/repository/postgres/payment/create_pending_test.go b/internal/adapter/repository/postgres/payment/create_pending_test.go
+new file mode 100644
+index 0000000..85d7c77
+--- /dev/null
++++ b/internal/adapter/repository/postgres/payment/create_pending_test.go
+@@ -0,0 +1,132 @@
++package payment_test
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"sync"
++	"testing"
++
++	"toko-online/internal/adapter/repository/postgres/order"
++	"toko-online/internal/adapter/repository/postgres/payment"
++	"toko-online/internal/adapter/repository/postgres/testdb"
++	"toko-online/internal/domain"
++)
++
++func TestPaymentCreatePending_JumlahDariDatabase(t *testing.T) {
++	db := testdb.Open(t)
++	f := testdb.SiapkanTagihan(t, db)
++
++	if f.Tagihan.Amount != 150000 {
++		t.Errorf("jumlah = %d, ingin 150000 (total pesanan di database)", f.Tagihan.Amount)
++	}
++	if f.Tagihan.Status != domain.PaymentPending || f.Tagihan.OrderID != f.Pesanan.ID || f.Tagihan.Reference != "SIM-uji-1" {
++		t.Errorf("tagihan tidak sesuai: %+v", f.Tagihan)
++	}
++	if f.Tagihan.PaidAt != nil {
++		t.Error("PaidAt harus kosong untuk tagihan pending")
++	}
++}
++
++func TestPaymentCreatePending_Idempoten(t *testing.T) {
++	db := testdb.Open(t)
++	f := testdb.SiapkanTagihan(t, db)
++	repo := payment.NewPaymentPostgres(db)
++	ctx := context.Background()
++
++	kedua, err := repo.CreatePending(ctx, f.Pesanan.ID, "SIM-uji-2")
++	if err != nil {
++		t.Fatalf("create kedua gagal: %v", err)
++	}
++
++	if kedua.ID != f.Tagihan.ID || kedua.Reference != "SIM-uji-1" {
++		t.Errorf("harus mengembalikan tagihan pertama, dapat %+v", kedua)
++	}
++	if n := testdb.Count(t, db, `SELECT count(*) FROM payments WHERE order_id = $1`, f.Pesanan.ID); n != 1 {
++		t.Errorf("jumlah tagihan = %d, ingin 1", n)
++	}
++
++	ada, err := repo.GetPendingByOrder(ctx, f.Pesanan.ID)
++	if err != nil || ada.ID != f.Tagihan.ID {
++		t.Errorf("GetPendingByOrder: tagihan=%v error=%v", ada, err)
++	}
++}
++
++func TestPaymentCreatePending_TidakBisa(t *testing.T) {
++	db := testdb.Open(t)
++	f := testdb.SiapkanTagihan(t, db)
++	repo := payment.NewPaymentPostgres(db)
++	ctx := context.Background()
++
++	t.Run("pesanan tidak ada", func(t *testing.T) {
++		_, err := repo.CreatePending(ctx, 999999, "SIM-x")
++		if !errors.Is(err, domain.ErrOrderNotFound) {
++			t.Errorf("error = %v, ingin ErrOrderNotFound", err)
++		}
++	})
++
++	t.Run("pesanan sudah dibatalkan", func(t *testing.T) {
++		dibatalkan := testdb.SeedPesanan(t, db, f.User, f.Produk, 1)
++		if _, err := order.NewOrderPostgres(db).Cancel(ctx, dibatalkan.ID); err != nil {
++			t.Fatalf("setup gagal: %v", err)
++		}
++
++		_, err := repo.CreatePending(ctx, dibatalkan.ID, "SIM-y")
++
++		if !errors.Is(err, domain.ErrOrderNotPayable) {
++			t.Errorf("error = %v, ingin ErrOrderNotPayable", err)
++		}
++	})
++
++	t.Run("pesanan tanpa tagihan pending", func(t *testing.T) {
++		lain := testdb.SeedPesanan(t, db, f.User, f.Produk, 1)
++		_, err := repo.GetPendingByOrder(ctx, lain.ID)
++		if !errors.Is(err, domain.ErrPaymentNotFound) {
++			t.Errorf("error = %v, ingin ErrPaymentNotFound", err)
++		}
++	})
++}
++
++func TestPaymentCreatePending_Konkuren(t *testing.T) {
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
++	repo := payment.NewPaymentPostgres(db)
++	ctx := context.Background()
++
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++	produk := testdb.SeedProduct(t, db, "Kopi", 50000, 10)
++	o := testdb.SeedPesanan(t, db, user, produk, 1)
++
++	const pemanggil = 10
++	var (
++		wg        sync.WaitGroup
++		mulai     = make(chan struct{})
++		idTagihan = make([]int64, pemanggil)
++	)
++
++	for i := 0; i < pemanggil; i++ {
++		wg.Add(1)
++		go func(i int) {
++			defer wg.Done()
++			<-mulai
++
++			p, err := repo.CreatePending(ctx, o.ID, fmt.Sprintf("SIM-konkuren-%d", i))
++			if err != nil {
++				t.Errorf("pemanggil %d: %v", i, err)
++				return
++			}
++			idTagihan[i] = p.ID
++		}(i)
++	}
++	close(mulai)
++	wg.Wait()
++
++	if n := testdb.Count(t, db, `SELECT count(*) FROM payments WHERE order_id = $1`, o.ID); n != 1 {
++		t.Errorf("jumlah tagihan = %d, ingin tepat 1", n)
++	}
++	for i, id := range idTagihan {
++		if id == 0 || id != idTagihan[0] {
++			t.Errorf("pemanggil %d mendapat tagihan %d, ingin semuanya sama dengan %d", i, id, idTagihan[0])
++		}
++	}
++}
+diff --git a/internal/adapter/repository/postgres/payment_postgres.go b/internal/adapter/repository/postgres/payment/payment.go
+similarity index 98%
+rename from internal/adapter/repository/postgres/payment_postgres.go
+rename to internal/adapter/repository/postgres/payment/payment.go
+index 9f0a4e5..3a34008 100644
+--- a/internal/adapter/repository/postgres/payment_postgres.go
++++ b/internal/adapter/repository/postgres/payment/payment.go
+@@ -1,4 +1,4 @@
+-package postgres
++package payment
+ 
+ import (
+ 	"context"
+@@ -13,6 +13,10 @@ import (
+ 
+ const paymentColumns = `id, order_id, reference, amount, status, created_at, paid_at`
+ 
++type scanner interface {
++	Scan(dest ...any) error
++}
++
+ func scanPayment(s scanner, p *domain.Payment) error {
+ 	return s.Scan(&p.ID, &p.OrderID, &p.Reference, &p.Amount, &p.Status, &p.CreatedAt, &p.PaidAt)
+ }
+diff --git a/internal/adapter/repository/postgres/payment_postgres_test.go b/internal/adapter/repository/postgres/payment_postgres_test.go
+deleted file mode 100644
+index 873df23..0000000
+--- a/internal/adapter/repository/postgres/payment_postgres_test.go
++++ /dev/null
+@@ -1,434 +0,0 @@
+-package postgres
+-
+-import (
+-	"context"
+-	"database/sql"
+-	"errors"
+-	"fmt"
+-	"sync"
+-	"sync/atomic"
+-	"testing"
+-
+-	"toko-online/internal/domain"
+-)
+-
+-// ---- fungsi bantu ----
+-
+-func teks(t *testing.T, db *sql.DB, query string, args ...any) string {
+-	t.Helper()
+-	var s string
+-	if err := db.QueryRow(query, args...).Scan(&s); err != nil {
+-		t.Fatalf("query teks %q: %v", query, err)
+-	}
+-	return s
+-}
+-
+-func seedPesanan(t *testing.T, db *sql.DB, userID, productID int64, jumlah int) *domain.Order {
+-	t.Helper()
+-	o, err := NewOrderPostgres(db).Create(context.Background(), userID,
+-		[]domain.OrderLine{{ProductID: productID, Jumlah: jumlah}})
+-	if err != nil {
+-		t.Fatalf("seed pesanan: %v", err)
+-	}
+-	return o
+-}
+-
+-type fixturBayar struct {
+-	user    int64
+-	produk  int64
+-	pesanan *domain.Order
+-	tagihan *domain.Payment
+-}
+-
+-func siapkanTagihan(t *testing.T, db *sql.DB) fixturBayar {
+-	t.Helper()
+-	resetDB(t, db)
+-	user := seedUser(t, db, "siti@mail.com")
+-	produk := seedProduct(t, db, "Kopi", 50000, 10)
+-	o := seedPesanan(t, db, user, produk, 3)
+-
+-	p, err := NewPaymentPostgres(db).CreatePending(context.Background(), o.ID, "SIM-uji-1")
+-	if err != nil {
+-		t.Fatalf("setup tagihan: %v", err)
+-	}
+-	return fixturBayar{user: user, produk: produk, pesanan: o, tagihan: p}
+-}
+-
+-func statusPesanan(t *testing.T, db *sql.DB, id int64) string {
+-	t.Helper()
+-	return teks(t, db, `SELECT status FROM orders WHERE id = $1`, id)
+-}
+-
+-func statusPembayaran(t *testing.T, db *sql.DB, id int64) string {
+-	t.Helper()
+-	return teks(t, db, `SELECT status FROM payments WHERE id = $1`, id)
+-}
+-
+-func stokProduk(t *testing.T, db *sql.DB, id int64) int64 {
+-	t.Helper()
+-	return hitung(t, db, `SELECT stok FROM products WHERE id = $1`, id)
+-}
+-
+-// ---- CreatePending dan GetPendingByOrder ----
+-
+-func TestPaymentCreatePending_JumlahDariDatabase(t *testing.T) {
+-	db := openTestDB(t)
+-	f := siapkanTagihan(t, db)
+-
+-	if f.tagihan.Amount != 150000 {
+-		t.Errorf("jumlah = %d, ingin 150000 (total pesanan di database)", f.tagihan.Amount)
+-	}
+-	if f.tagihan.Status != domain.PaymentPending || f.tagihan.OrderID != f.pesanan.ID || f.tagihan.Reference != "SIM-uji-1" {
+-		t.Errorf("tagihan tidak sesuai: %+v", f.tagihan)
+-	}
+-	if f.tagihan.PaidAt != nil {
+-		t.Error("PaidAt harus kosong untuk tagihan pending")
+-	}
+-}
+-
+-func TestPaymentCreatePending_Idempoten(t *testing.T) {
+-	db := openTestDB(t)
+-	f := siapkanTagihan(t, db)
+-	repo := NewPaymentPostgres(db)
+-	ctx := context.Background()
+-
+-	kedua, err := repo.CreatePending(ctx, f.pesanan.ID, "SIM-uji-2")
+-	if err != nil {
+-		t.Fatalf("create kedua gagal: %v", err)
+-	}
+-
+-	if kedua.ID != f.tagihan.ID || kedua.Reference != "SIM-uji-1" {
+-		t.Errorf("harus mengembalikan tagihan pertama, dapat %+v", kedua)
+-	}
+-	if n := hitung(t, db, `SELECT count(*) FROM payments WHERE order_id = $1`, f.pesanan.ID); n != 1 {
+-		t.Errorf("jumlah tagihan = %d, ingin 1", n)
+-	}
+-
+-	ada, err := repo.GetPendingByOrder(ctx, f.pesanan.ID)
+-	if err != nil || ada.ID != f.tagihan.ID {
+-		t.Errorf("GetPendingByOrder: tagihan=%v error=%v", ada, err)
+-	}
+-}
+-
+-func TestPaymentCreatePending_TidakBisa(t *testing.T) {
+-	db := openTestDB(t)
+-	f := siapkanTagihan(t, db)
+-	repo := NewPaymentPostgres(db)
+-	ctx := context.Background()
+-
+-	t.Run("pesanan tidak ada", func(t *testing.T) {
+-		_, err := repo.CreatePending(ctx, 999999, "SIM-x")
+-		if !errors.Is(err, domain.ErrOrderNotFound) {
+-			t.Errorf("error = %v, ingin ErrOrderNotFound", err)
+-		}
+-	})
+-
+-	t.Run("pesanan sudah dibatalkan", func(t *testing.T) {
+-		dibatalkan := seedPesanan(t, db, f.user, f.produk, 1)
+-		if _, err := NewOrderPostgres(db).Cancel(ctx, dibatalkan.ID); err != nil {
+-			t.Fatalf("setup gagal: %v", err)
+-		}
+-
+-		_, err := repo.CreatePending(ctx, dibatalkan.ID, "SIM-y")
+-
+-		if !errors.Is(err, domain.ErrOrderNotPayable) {
+-			t.Errorf("error = %v, ingin ErrOrderNotPayable", err)
+-		}
+-	})
+-
+-	t.Run("pesanan tanpa tagihan pending", func(t *testing.T) {
+-		lain := seedPesanan(t, db, f.user, f.produk, 1)
+-		_, err := repo.GetPendingByOrder(ctx, lain.ID)
+-		if !errors.Is(err, domain.ErrPaymentNotFound) {
+-			t.Errorf("error = %v, ingin ErrPaymentNotFound", err)
+-		}
+-	})
+-}
+-
+-func TestPaymentCreatePending_Konkuren(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewPaymentPostgres(db)
+-	ctx := context.Background()
+-
+-	user := seedUser(t, db, "siti@mail.com")
+-	produk := seedProduct(t, db, "Kopi", 50000, 10)
+-	o := seedPesanan(t, db, user, produk, 1)
+-
+-	const pemanggil = 10
+-	var (
+-		wg        sync.WaitGroup
+-		mulai     = make(chan struct{})
+-		idTagihan = make([]int64, pemanggil)
+-	)
+-
+-	for i := 0; i < pemanggil; i++ {
+-		wg.Add(1)
+-		go func(i int) {
+-			defer wg.Done()
+-			<-mulai
+-
+-			p, err := repo.CreatePending(ctx, o.ID, fmt.Sprintf("SIM-konkuren-%d", i))
+-			if err != nil {
+-				t.Errorf("pemanggil %d: %v", i, err)
+-				return
+-			}
+-			idTagihan[i] = p.ID
+-		}(i)
+-	}
+-	close(mulai)
+-	wg.Wait()
+-
+-	if n := hitung(t, db, `SELECT count(*) FROM payments WHERE order_id = $1`, o.ID); n != 1 {
+-		t.Errorf("jumlah tagihan = %d, ingin tepat 1", n)
+-	}
+-	for i, id := range idTagihan {
+-		if id == 0 || id != idTagihan[0] {
+-			t.Errorf("pemanggil %d mendapat tagihan %d, ingin semuanya sama dengan %d", i, id, idTagihan[0])
+-		}
+-	}
+-}
+-
+-// ---- ApplyPaid ----
+-
+-func TestPaymentApplyPaid_Sukses(t *testing.T) {
+-	db := openTestDB(t)
+-	f := siapkanTagihan(t, db)
+-	repo := NewPaymentPostgres(db)
+-
+-	hasil, err := repo.ApplyPaid(context.Background(), f.tagihan.Reference, 150000)
+-
+-	if err != nil {
+-		t.Fatalf("apply gagal: %v", err)
+-	}
+-	if hasil != domain.OutcomePaid {
+-		t.Errorf("hasil = %q, ingin %q", hasil, domain.OutcomePaid)
+-	}
+-	if s := statusPesanan(t, db, f.pesanan.ID); s != "paid" {
+-		t.Errorf("status pesanan = %q, ingin paid", s)
+-	}
+-	if s := statusPembayaran(t, db, f.tagihan.ID); s != "paid" {
+-		t.Errorf("status pembayaran = %q, ingin paid", s)
+-	}
+-	if n := hitung(t, db, `SELECT count(*) FROM payments WHERE id = $1 AND paid_at IS NOT NULL`, f.tagihan.ID); n != 1 {
+-		t.Error("paid_at harus terisi")
+-	}
+-	if stok := stokProduk(t, db, f.produk); stok != 7 {
+-		t.Errorf("stok = %d, ingin 7 (pesanan lunas tidak mengubah stok)", stok)
+-	}
+-}
+-
+-func TestPaymentApplyPaid_Idempoten(t *testing.T) {
+-	db := openTestDB(t)
+-	f := siapkanTagihan(t, db)
+-	repo := NewPaymentPostgres(db)
+-	ctx := context.Background()
+-
+-	pertama, err := repo.ApplyPaid(ctx, f.tagihan.Reference, 150000)
+-	if err != nil {
+-		t.Fatalf("apply pertama gagal: %v", err)
+-	}
+-	kedua, err := repo.ApplyPaid(ctx, f.tagihan.Reference, 150000)
+-	if err != nil {
+-		t.Fatalf("apply kedua gagal: %v", err)
+-	}
+-
+-	if pertama != domain.OutcomePaid || kedua != domain.OutcomeAlreadyPaid {
+-		t.Errorf("hasil = (%q, %q), ingin (%q, %q)", pertama, kedua, domain.OutcomePaid, domain.OutcomeAlreadyPaid)
+-	}
+-	if s := statusPesanan(t, db, f.pesanan.ID); s != "paid" {
+-		t.Errorf("status pesanan = %q, ingin paid", s)
+-	}
+-}
+-
+-func TestPaymentApplyPaid_JumlahTidakSesuai(t *testing.T) {
+-	db := openTestDB(t)
+-	f := siapkanTagihan(t, db)
+-	repo := NewPaymentPostgres(db)
+-
+-	_, err := repo.ApplyPaid(context.Background(), f.tagihan.Reference, 149999)
+-
+-	if !errors.Is(err, domain.ErrAmountMismatch) {
+-		t.Fatalf("error = %v, ingin ErrAmountMismatch", err)
+-	}
+-	if s := statusPesanan(t, db, f.pesanan.ID); s != "pending" {
+-		t.Errorf("status pesanan = %q, ingin tetap pending", s)
+-	}
+-	if s := statusPembayaran(t, db, f.tagihan.ID); s != "pending" {
+-		t.Errorf("status pembayaran = %q, ingin tetap pending", s)
+-	}
+-}
+-
+-func TestPaymentApplyPaid_ReferensiTidakAda(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	repo := NewPaymentPostgres(db)
+-
+-	_, err := repo.ApplyPaid(context.Background(), "SIM-tidak-ada", 1000)
+-
+-	if !errors.Is(err, domain.ErrPaymentNotFound) {
+-		t.Fatalf("error = %v, ingin ErrPaymentNotFound", err)
+-	}
+-}
+-
+-func TestPaymentApplyPaid_Terlambat(t *testing.T) {
+-	db := openTestDB(t)
+-	f := siapkanTagihan(t, db)
+-	repo := NewPaymentPostgres(db)
+-	ctx := context.Background()
+-
+-	if _, err := NewOrderPostgres(db).Cancel(ctx, f.pesanan.ID); err != nil {
+-		t.Fatalf("setup: batalkan pesanan gagal: %v", err)
+-	}
+-
+-	hasil, err := repo.ApplyPaid(ctx, f.tagihan.Reference, 150000)
+-
+-	if err != nil {
+-		t.Fatalf("apply gagal: %v", err)
+-	}
+-	if hasil != domain.OutcomeRefundNeeded {
+-		t.Errorf("hasil = %q, ingin %q", hasil, domain.OutcomeRefundNeeded)
+-	}
+-	if s := statusPesanan(t, db, f.pesanan.ID); s != "cancelled" {
+-		t.Errorf("status pesanan = %q, ingin tetap cancelled", s)
+-	}
+-	if s := statusPembayaran(t, db, f.tagihan.ID); s != "refund_needed" {
+-		t.Errorf("status pembayaran = %q, ingin refund_needed", s)
+-	}
+-	if stok := stokProduk(t, db, f.produk); stok != 10 {
+-		t.Errorf("stok = %d, ingin 10 (sudah dikembalikan oleh pembatalan, dan pembayaran tidak mengubahnya)", stok)
+-	}
+-
+-	// Webhook ulang untuk kasus ini tetap dijawab sama dan tidak mengubah apa pun.
+-	ulang, err := repo.ApplyPaid(ctx, f.tagihan.Reference, 150000)
+-	if err != nil || ulang != domain.OutcomeRefundNeeded {
+-		t.Errorf("webhook ulang: hasil=%q error=%v, ingin %q", ulang, err, domain.OutcomeRefundNeeded)
+-	}
+-}
+-
+-func TestPaymentApplyPaid_Konkuren_WebhookDuplikat(t *testing.T) {
+-	db := openTestDB(t)
+-	f := siapkanTagihan(t, db)
+-	repo := NewPaymentPostgres(db)
+-	ctx := context.Background()
+-
+-	const pengiriman = 10
+-	var (
+-		wg      sync.WaitGroup
+-		mulai   = make(chan struct{})
+-		dibayar atomic.Int64
+-		sudah   atomic.Int64
+-	)
+-
+-	for i := 0; i < pengiriman; i++ {
+-		wg.Add(1)
+-		go func() {
+-			defer wg.Done()
+-			<-mulai
+-
+-			hasil, err := repo.ApplyPaid(ctx, f.tagihan.Reference, 150000)
+-			switch {
+-			case err != nil:
+-				t.Errorf("error tak terduga: %v", err)
+-			case hasil == domain.OutcomePaid:
+-				dibayar.Add(1)
+-			case hasil == domain.OutcomeAlreadyPaid:
+-				sudah.Add(1)
+-			default:
+-				t.Errorf("hasil tak terduga: %q", hasil)
+-			}
+-		}()
+-	}
+-	close(mulai)
+-	wg.Wait()
+-
+-	if dibayar.Load() != 1 {
+-		t.Errorf("diproses sebagai lunas = %d kali, ingin tepat 1", dibayar.Load())
+-	}
+-	if sudah.Load() != pengiriman-1 {
+-		t.Errorf("dijawab sudah lunas = %d kali, ingin %d", sudah.Load(), pengiriman-1)
+-	}
+-	if s := statusPesanan(t, db, f.pesanan.ID); s != "paid" {
+-		t.Errorf("status pesanan = %q, ingin paid", s)
+-	}
+-}
+-
+-func TestPaymentApplyPaid_Balapan_BayarLawanBatal(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
+-	orders := NewOrderPostgres(db)
+-	payments := NewPaymentPostgres(db)
+-	ctx := context.Background()
+-
+-	const putaran = 30
+-	const stokAwal = 100
+-
+-	user := seedUser(t, db, "siti@mail.com")
+-	produk := seedProduct(t, db, "Barang Balapan", 10000, stokAwal)
+-
+-	lunas := 0
+-	for i := 0; i < putaran; i++ {
+-		o := seedPesanan(t, db, user, produk, 1)
+-		ref := fmt.Sprintf("SIM-balapan-%d", i)
+-		p, err := payments.CreatePending(ctx, o.ID, ref)
+-		if err != nil {
+-			t.Fatalf("putaran %d: setup tagihan gagal: %v", i, err)
+-		}
+-
+-		var (
+-			wg         sync.WaitGroup
+-			mulai      = make(chan struct{})
+-			hasilBayar domain.PaymentOutcome
+-			errBayar   error
+-			errBatal   error
+-		)
+-		wg.Add(2)
+-		go func() {
+-			defer wg.Done()
+-			<-mulai
+-			hasilBayar, errBayar = payments.ApplyPaid(ctx, ref, o.Total)
+-		}()
+-		go func() {
+-			defer wg.Done()
+-			<-mulai
+-			_, errBatal = orders.Cancel(ctx, o.ID)
+-		}()
+-		close(mulai)
+-		wg.Wait()
+-
+-		if errBayar != nil {
+-			t.Fatalf("putaran %d: ApplyPaid gagal: %v", i, errBayar)
+-		}
+-
+-		switch hasilBayar {
+-		case domain.OutcomePaid:
+-			lunas++
+-			if !errors.Is(errBatal, domain.ErrOrderNotCancellable) {
+-				t.Errorf("putaran %d: pembayaran menang, pembatalan seharusnya ErrOrderNotCancellable, dapat %v", i, errBatal)
+-			}
+-			if s := statusPesanan(t, db, o.ID); s != "paid" {
+-				t.Errorf("putaran %d: status pesanan = %q, ingin paid", i, s)
+-			}
+-			if s := statusPembayaran(t, db, p.ID); s != "paid" {
+-				t.Errorf("putaran %d: status pembayaran = %q, ingin paid", i, s)
+-			}
+-		case domain.OutcomeRefundNeeded:
+-			if errBatal != nil {
+-				t.Errorf("putaran %d: pembatalan menang, seharusnya berhasil, dapat %v", i, errBatal)
+-			}
+-			if s := statusPesanan(t, db, o.ID); s != "cancelled" {
+-				t.Errorf("putaran %d: status pesanan = %q, ingin cancelled", i, s)
+-			}
+-			if s := statusPembayaran(t, db, p.ID); s != "refund_needed" {
+-				t.Errorf("putaran %d: status pembayaran = %q, ingin refund_needed", i, s)
+-			}
+-		default:
+-			t.Fatalf("putaran %d: hasil tak terduga %q", i, hasilBayar)
+-		}
+-	}
+-
+-	if stok := stokProduk(t, db, produk); stok != int64(stokAwal-lunas) {
+-		t.Errorf("stok akhir = %d, ingin %d (stok awal %d dikurangi %d pesanan lunas)", stok, stokAwal-lunas, stokAwal, lunas)
+-	}
+-	t.Logf("dari %d putaran: %d pembayaran menang, %d pembatalan menang", putaran, lunas, putaran-lunas)
+-}
+diff --git a/internal/adapter/repository/postgres/postgres.go b/internal/adapter/repository/postgres/postgres.go
+new file mode 100644
+index 0000000..6c6fa12
+--- /dev/null
++++ b/internal/adapter/repository/postgres/postgres.go
+@@ -0,0 +1,15 @@
++package postgres
++
++import (
++	"toko-online/internal/adapter/repository/postgres/order"
++	"toko-online/internal/adapter/repository/postgres/payment"
++	"toko-online/internal/adapter/repository/postgres/product"
++	"toko-online/internal/adapter/repository/postgres/user"
++)
++
++var (
++	NewUserPostgres    = user.NewUserPostgres
++	NewProductPostgres = product.NewProductPostgres
++	NewOrderPostgres   = order.NewOrderPostgres
++	NewPaymentPostgres = payment.NewPaymentPostgres
++)
+diff --git a/internal/adapter/repository/postgres/product_postgres.go b/internal/adapter/repository/postgres/product/product.go
+similarity index 99%
+rename from internal/adapter/repository/postgres/product_postgres.go
+rename to internal/adapter/repository/postgres/product/product.go
+index 0710f3f..a3a5a95 100644
+--- a/internal/adapter/repository/postgres/product_postgres.go
++++ b/internal/adapter/repository/postgres/product/product.go
+@@ -1,4 +1,4 @@
+-package postgres
++package product
+ 
+ import (
+ 	"context"
+diff --git a/internal/adapter/repository/postgres/product_postgres_test.go b/internal/adapter/repository/postgres/product/product_test.go
+similarity index 55%
+rename from internal/adapter/repository/postgres/product_postgres_test.go
+rename to internal/adapter/repository/postgres/product/product_test.go
+index 92b8701..1e8db7f 100644
+--- a/internal/adapter/repository/postgres/product_postgres_test.go
++++ b/internal/adapter/repository/postgres/product/product_test.go
+@@ -1,23 +1,26 @@
+-package postgres
++package product_test
+ 
+ import (
+ 	"context"
+ 	"errors"
+ 	"testing"
+ 
++	"toko-online/internal/adapter/repository/postgres/order"
++	"toko-online/internal/adapter/repository/postgres/product"
++	"toko-online/internal/adapter/repository/postgres/testdb"
+ 	"toko-online/internal/domain"
+ )
+ 
+ func TestProductDelete_SudahPernahDipesan(t *testing.T) {
+-	db := openTestDB(t)
+-	resetDB(t, db)
++	db := testdb.Open(t)
++	testdb.Reset(t, db)
+ 	ctx := context.Background()
+-	produk := NewProductPostgres(db)
+-	pesanan := NewOrderPostgres(db)
++	produk := product.NewProductPostgres(db)
++	pesanan := order.NewOrderPostgres(db)
+ 
+-	user := seedUser(t, db, "siti@mail.com")
+-	dipesan := seedProduct(t, db, "Sudah Dipesan", 10000, 5)
+-	bebas := seedProduct(t, db, "Belum Pernah Dipesan", 10000, 5)
++	user := testdb.SeedUser(t, db, "siti@mail.com")
++	dipesan := testdb.SeedProduct(t, db, "Sudah Dipesan", 10000, 5)
++	bebas := testdb.SeedProduct(t, db, "Belum Pernah Dipesan", 10000, 5)
+ 
+ 	if _, err := pesanan.Create(ctx, user, []domain.OrderLine{{ProductID: dipesan, Jumlah: 1}}); err != nil {
+ 		t.Fatalf("setup gagal: %v", err)
+diff --git a/internal/adapter/repository/postgres/testdb_test.go b/internal/adapter/repository/postgres/testdb/db.go
+similarity index 82%
+rename from internal/adapter/repository/postgres/testdb_test.go
+rename to internal/adapter/repository/postgres/testdb/db.go
+index 679c7da..47d9011 100644
+--- a/internal/adapter/repository/postgres/testdb_test.go
++++ b/internal/adapter/repository/postgres/testdb/db.go
+@@ -1,4 +1,4 @@
+-package postgres
++package testdb
+ 
+ import (
+ 	"context"
+@@ -12,7 +12,7 @@ import (
+ 	_ "github.com/lib/pq"
+ )
+ 
+-func openTestDB(t *testing.T) *sql.DB {
++func Open(t *testing.T) *sql.DB {
+ 	t.Helper()
+ 
+ 	raw := os.Getenv("TEST_DATABASE_URL")
+@@ -42,14 +42,14 @@ func openTestDB(t *testing.T) *sql.DB {
+ 	return db
+ }
+ 
+-func resetDB(t *testing.T, db *sql.DB) {
++func Reset(t *testing.T, db *sql.DB) {
+ 	t.Helper()
+ 	if _, err := db.Exec(`TRUNCATE payments, order_items, orders, products, users RESTART IDENTITY CASCADE`); err != nil {
+ 		t.Fatalf("reset database uji: %v", err)
+ 	}
+ }
+ 
+-func seedUser(t *testing.T, db *sql.DB, email string) int64 {
++func SeedUser(t *testing.T, db *sql.DB, email string) int64 {
+ 	t.Helper()
+ 	var id int64
+ 	err := db.QueryRow(
+@@ -62,7 +62,7 @@ func seedUser(t *testing.T, db *sql.DB, email string) int64 {
+ 	return id
+ }
+ 
+-func seedProduct(t *testing.T, db *sql.DB, nama string, harga int64, stok int) int64 {
++func SeedProduct(t *testing.T, db *sql.DB, nama string, harga int64, stok int) int64 {
+ 	t.Helper()
+ 	var id int64
+ 	err := db.QueryRow(
+@@ -75,8 +75,8 @@ func seedProduct(t *testing.T, db *sql.DB, nama string, harga int64, stok int) i
+ 	return id
+ }
+ 
+-// hitung menjalankan query yang menghasilkan satu angka.
+-func hitung(t *testing.T, db *sql.DB, query string, args ...any) int64 {
++// Count menjalankan query yang menghasilkan satu angka.
++func Count(t *testing.T, db *sql.DB, query string, args ...any) int64 {
+ 	t.Helper()
+ 	var n int64
+ 	if err := db.QueryRow(query, args...).Scan(&n); err != nil {
+diff --git a/internal/adapter/repository/postgres/testdb/fixture.go b/internal/adapter/repository/postgres/testdb/fixture.go
+new file mode 100644
+index 0000000..97ec0e3
+--- /dev/null
++++ b/internal/adapter/repository/postgres/testdb/fixture.go
+@@ -0,0 +1,66 @@
++package testdb
++
++import (
++	"context"
++	"database/sql"
++	"testing"
++
++	"toko-online/internal/adapter/repository/postgres/order"
++	"toko-online/internal/adapter/repository/postgres/payment"
++	"toko-online/internal/domain"
++)
++
++func teks(t *testing.T, db *sql.DB, query string, args ...any) string {
++	t.Helper()
++	var s string
++	if err := db.QueryRow(query, args...).Scan(&s); err != nil {
++		t.Fatalf("query teks %q: %v", query, err)
++	}
++	return s
++}
++
++func SeedPesanan(t *testing.T, db *sql.DB, userID, productID int64, jumlah int) *domain.Order {
++	t.Helper()
++	o, err := order.NewOrderPostgres(db).Create(context.Background(), userID,
++		[]domain.OrderLine{{ProductID: productID, Jumlah: jumlah}})
++	if err != nil {
++		t.Fatalf("seed pesanan: %v", err)
++	}
++	return o
++}
++
++type FixturBayar struct {
++	User    int64
++	Produk  int64
++	Pesanan *domain.Order
++	Tagihan *domain.Payment
++}
++
++func SiapkanTagihan(t *testing.T, db *sql.DB) FixturBayar {
++	t.Helper()
++	Reset(t, db)
++	user := SeedUser(t, db, "siti@mail.com")
++	produk := SeedProduct(t, db, "Kopi", 50000, 10)
++	o := SeedPesanan(t, db, user, produk, 3)
++
++	p, err := payment.NewPaymentPostgres(db).CreatePending(context.Background(), o.ID, "SIM-uji-1")
++	if err != nil {
++		t.Fatalf("setup tagihan: %v", err)
++	}
++	return FixturBayar{User: user, Produk: produk, Pesanan: o, Tagihan: p}
++}
++
++func StatusPesanan(t *testing.T, db *sql.DB, id int64) string {
++	t.Helper()
++	return teks(t, db, `SELECT status FROM orders WHERE id = $1`, id)
++}
++
++func StatusPembayaran(t *testing.T, db *sql.DB, id int64) string {
++	t.Helper()
++	return teks(t, db, `SELECT status FROM payments WHERE id = $1`, id)
++}
++
++func StokProduk(t *testing.T, db *sql.DB, id int64) int64 {
++	t.Helper()
++	return Count(t, db, `SELECT stok FROM products WHERE id = $1`, id)
++}
+diff --git a/internal/adapter/repository/postgres/user_postgres.go b/internal/adapter/repository/postgres/user/user.go
+similarity index 99%
+rename from internal/adapter/repository/postgres/user_postgres.go
+rename to internal/adapter/repository/postgres/user/user.go
+index 9e0543c..643b625 100644
+--- a/internal/adapter/repository/postgres/user_postgres.go
++++ b/internal/adapter/repository/postgres/user/user.go
+@@ -1,4 +1,4 @@
+-package postgres
++package user
+ 
+ import (
+ 	"context"
+diff --git a/test-integrasi.sh b/test-integrasi.sh
+index 4ed3c06..d914bdf 100755
+--- a/test-integrasi.sh
++++ b/test-integrasi.sh
+@@ -9,4 +9,4 @@ if ! psql postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$TEST_DB'" | g
+ fi
+ 
+ DATABASE_URL="$TEST_DATABASE_URL" ./migrate.sh up
+-go test -count=1 -race -v ./internal/adapter/repository/postgres/
++go test -p 1 -count=1 -race -v ./internal/adapter/repository/postgres/...

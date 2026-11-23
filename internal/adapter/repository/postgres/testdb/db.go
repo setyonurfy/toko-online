@@ -1,4 +1,4 @@
-package postgres
+package testdb
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	_ "github.com/lib/pq"
 )
 
-func openTestDB(t *testing.T) *sql.DB {
+func Open(t *testing.T) *sql.DB {
 	t.Helper()
 
 	raw := os.Getenv("TEST_DATABASE_URL")
@@ -42,14 +42,14 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func resetDB(t *testing.T, db *sql.DB) {
+func Reset(t *testing.T, db *sql.DB) {
 	t.Helper()
 	if _, err := db.Exec(`TRUNCATE payments, order_items, orders, products, users RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("reset database uji: %v", err)
 	}
 }
 
-func seedUser(t *testing.T, db *sql.DB, email string) int64 {
+func SeedUser(t *testing.T, db *sql.DB, email string) int64 {
 	t.Helper()
 	var id int64
 	err := db.QueryRow(
@@ -62,7 +62,7 @@ func seedUser(t *testing.T, db *sql.DB, email string) int64 {
 	return id
 }
 
-func seedProduct(t *testing.T, db *sql.DB, nama string, harga int64, stok int) int64 {
+func SeedProduct(t *testing.T, db *sql.DB, nama string, harga int64, stok int) int64 {
 	t.Helper()
 	var id int64
 	err := db.QueryRow(
@@ -75,8 +75,8 @@ func seedProduct(t *testing.T, db *sql.DB, nama string, harga int64, stok int) i
 	return id
 }
 
-// hitung menjalankan query yang menghasilkan satu angka.
-func hitung(t *testing.T, db *sql.DB, query string, args ...any) int64 {
+// Count menjalankan query yang menghasilkan satu angka.
+func Count(t *testing.T, db *sql.DB, query string, args ...any) int64 {
 	t.Helper()
 	var n int64
 	if err := db.QueryRow(query, args...).Scan(&n); err != nil {

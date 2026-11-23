@@ -1,4 +1,4 @@
-package postgres
+package payment
 
 import (
 	"context"
@@ -12,6 +12,10 @@ import (
 )
 
 const paymentColumns = `id, order_id, reference, amount, status, created_at, paid_at`
+
+type scanner interface {
+	Scan(dest ...any) error
+}
 
 func scanPayment(s scanner, p *domain.Payment) error {
 	return s.Scan(&p.ID, &p.OrderID, &p.Reference, &p.Amount, &p.Status, &p.CreatedAt, &p.PaidAt)

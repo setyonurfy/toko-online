@@ -1,4 +1,4 @@
-package postgres
+package order_test
 
 import (
 	"context"
@@ -7,18 +7,20 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"toko-online/internal/adapter/repository/postgres/order"
+	"toko-online/internal/adapter/repository/postgres/testdb"
 	"toko-online/internal/domain"
 )
 
 func TestOrderCancel_MengembalikanStok(t *testing.T) {
-	db := openTestDB(t)
-	resetDB(t, db)
-	repo := NewOrderPostgres(db)
+	db := testdb.Open(t)
+	testdb.Reset(t, db)
+	repo := order.NewOrderPostgres(db)
 	ctx := context.Background()
 
-	user := seedUser(t, db, "siti@mail.com")
-	a := seedProduct(t, db, "Barang A", 10000, 10)
-	b := seedProduct(t, db, "Barang B", 20000, 5)
+	user := testdb.SeedUser(t, db, "siti@mail.com")
+	a := testdb.SeedProduct(t, db, "Barang A", 10000, 10)
+	b := testdb.SeedProduct(t, db, "Barang B", 20000, 5)
 
 	o, err := repo.Create(ctx, user, []domain.OrderLine{
 		{ProductID: a, Jumlah: 3},
@@ -27,7 +29,7 @@ func TestOrderCancel_MengembalikanStok(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setup gagal: %v", err)
 	}
-	if stokA, stokB := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, a), hitung(t, db, `SELECT stok FROM products WHERE id = $1`, b); stokA != 7 || stokB != 3 {
+	if stokA, stokB := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, a), testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, b); stokA != 7 || stokB != 3 {
 		t.Fatalf("stok setelah memesan = (%d, %d), ingin (7, 3)", stokA, stokB)
 	}
 
@@ -42,10 +44,10 @@ func TestOrderCancel_MengembalikanStok(t *testing.T) {
 	if len(dibatalkan.Items) != 2 {
 		t.Errorf("jumlah barang pada hasil = %d, ingin 2", len(dibatalkan.Items))
 	}
-	if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, a); stok != 10 {
+	if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, a); stok != 10 {
 		t.Errorf("stok A = %d, ingin 10 (kembali ke awal)", stok)
 	}
-	if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, b); stok != 5 {
+	if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, b); stok != 5 {
 		t.Errorf("stok B = %d, ingin 5 (kembali ke awal)", stok)
 	}
 
@@ -59,14 +61,14 @@ func TestOrderCancel_MengembalikanStok(t *testing.T) {
 }
 
 func TestOrderCancel_HanyaPesananPending(t *testing.T) {
-	db := openTestDB(t)
-	repo := NewOrderPostgres(db)
+	db := testdb.Open(t)
+	repo := order.NewOrderPostgres(db)
 	ctx := context.Background()
 
 	t.Run("sudah dibatalkan: stok tidak boleh dikembalikan dua kali", func(t *testing.T) {
-		resetDB(t, db)
-		user := seedUser(t, db, "siti@mail.com")
-		produk := seedProduct(t, db, "Barang A", 10000, 10)
+		testdb.Reset(t, db)
+		user := testdb.SeedUser(t, db, "siti@mail.com")
+		produk := testdb.SeedProduct(t, db, "Barang A", 10000, 10)
 
 		o, err := repo.Create(ctx, user, []domain.OrderLine{{ProductID: produk, Jumlah: 3}})
 		if err != nil {
@@ -81,15 +83,15 @@ func TestOrderCancel_HanyaPesananPending(t *testing.T) {
 		if !errors.Is(err, domain.ErrOrderNotCancellable) {
 			t.Fatalf("pembatalan kedua: error = %v, ingin ErrOrderNotCancellable", err)
 		}
-		if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != 10 {
+		if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != 10 {
 			t.Errorf("stok = %d, ingin 10 (tidak boleh bertambah lagi)", stok)
 		}
 	})
 
 	t.Run("sudah dibayar: tidak boleh dibatalkan", func(t *testing.T) {
-		resetDB(t, db)
-		user := seedUser(t, db, "siti@mail.com")
-		produk := seedProduct(t, db, "Barang A", 10000, 10)
+		testdb.Reset(t, db)
+		user := testdb.SeedUser(t, db, "siti@mail.com")
+		produk := testdb.SeedProduct(t, db, "Barang A", 10000, 10)
 
 		o, err := repo.Create(ctx, user, []domain.OrderLine{{ProductID: produk, Jumlah: 3}})
 		if err != nil {
@@ -104,7 +106,7 @@ func TestOrderCancel_HanyaPesananPending(t *testing.T) {
 		if !errors.Is(err, domain.ErrOrderNotCancellable) {
 			t.Fatalf("error = %v, ingin ErrOrderNotCancellable", err)
 		}
-		if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != 7 {
+		if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != 7 {
 			t.Errorf("stok = %d, ingin 7 (pesanan dibayar tidak mengembalikan stok)", stok)
 		}
 		var status string
@@ -118,9 +120,9 @@ func TestOrderCancel_HanyaPesananPending(t *testing.T) {
 }
 
 func TestOrderCancel_PesananTidakAda(t *testing.T) {
-	db := openTestDB(t)
-	resetDB(t, db)
-	repo := NewOrderPostgres(db)
+	db := testdb.Open(t)
+	testdb.Reset(t, db)
+	repo := order.NewOrderPostgres(db)
 
 	_, err := repo.Cancel(context.Background(), 9999)
 
@@ -130,17 +132,17 @@ func TestOrderCancel_PesananTidakAda(t *testing.T) {
 }
 
 func TestOrderCancel_Konkuren_StokDikembalikanSekali(t *testing.T) {
-	db := openTestDB(t)
-	resetDB(t, db)
-	repo := NewOrderPostgres(db)
+	db := testdb.Open(t)
+	testdb.Reset(t, db)
+	repo := order.NewOrderPostgres(db)
 	ctx := context.Background()
 
 	const stokAwal = 10
 	const jumlahDipesan = 3
 	const pembatal = 10
 
-	user := seedUser(t, db, "siti@mail.com")
-	produk := seedProduct(t, db, "Barang Uji", 10000, stokAwal)
+	user := testdb.SeedUser(t, db, "siti@mail.com")
+	produk := testdb.SeedProduct(t, db, "Barang Uji", 10000, stokAwal)
 
 	o, err := repo.Create(ctx, user, []domain.OrderLine{{ProductID: produk, Jumlah: jumlahDipesan}})
 	if err != nil {
@@ -180,7 +182,7 @@ func TestOrderCancel_Konkuren_StokDikembalikanSekali(t *testing.T) {
 	if ditolak.Load() != pembatal-1 {
 		t.Errorf("pembatalan ditolak = %d, ingin %d", ditolak.Load(), pembatal-1)
 	}
-	if stok := hitung(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != stokAwal {
+	if stok := testdb.Count(t, db, `SELECT stok FROM products WHERE id = $1`, produk); stok != stokAwal {
 		t.Errorf("stok akhir = %d, ingin %d (stok hanya boleh dikembalikan sekali)", stok, stokAwal)
 	}
 }
