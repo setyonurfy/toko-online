@@ -1,9 +1,10 @@
-package usecase
+package order
 
 import (
 	"context"
 	"sort"
 	"toko-online/internal/domain"
+	"toko-online/internal/usecase/pagination"
 )
 
 const (
@@ -49,7 +50,7 @@ func (u *OrderUsecase) ListMine(ctx context.Context, userID int64, limit, offset
 	if userID <= 0 {
 		return nil, domain.ErrInvalidInput
 	}
-	limit, offset = normalizePage(limit, offset)
+	limit, offset = pagination.Normalize(limit, offset)
 	return u.orders.ListByUser(ctx, userID, limit, offset)
 }
 
@@ -77,11 +78,4 @@ func normalizeLines(lines []domain.OrderLine) ([]domain.OrderLine, error) {
 		return hasil[i].ProductID < hasil[j].ProductID
 	})
 	return hasil, nil
-}
-func (u *OrderUsecase) Cancel(ctx context.Context, userID, orderID int64) (*domain.Order, error) {
-	// Get memeriksa kepemilikan: pesanan orang lain dijawab sama dengan "tidak ada".
-	if _, err := u.Get(ctx, userID, orderID); err != nil {
-		return nil, err
-	}
-	return u.orders.Cancel(ctx, orderID)
 }

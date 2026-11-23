@@ -1,0 +1,75 @@
+diff --git a/cmd/api/main.go b/cmd/api/main.go
+index a1c3bf3..eefb7db 100644
+--- a/cmd/api/main.go
++++ b/cmd/api/main.go
+@@ -21,10 +21,7 @@ import (
+ 	"toko-online/internal/infrastructure/logging"
+ 	"toko-online/internal/infrastructure/payment"
+ 	"toko-online/internal/infrastructure/worker"
+-	authuc "toko-online/internal/usecase/auth"
+-	orderuc "toko-online/internal/usecase/order"
+-	paymentuc "toko-online/internal/usecase/payment"
+-	productuc "toko-online/internal/usecase/product"
++	"toko-online/internal/usecase"
+ )
+ 
+ func main() {
+@@ -73,23 +70,23 @@ func run() error {
+ 
+ 	userRepo := postgres.NewUserPostgres(db)
+ 	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
+-	authUsecase := authuc.NewAuthUsecase(userRepo, tokens)
++	authUsecase := usecase.NewAuthUsecase(userRepo, tokens)
+ 	authHandler := handler.NewAuthHandler(authUsecase)
+ 
+ 	productRepo := postgres.NewProductPostgres(db)
+-	productUsecase := productuc.NewProductUsecase(productRepo)
++	productUsecase := usecase.NewProductUsecase(productRepo)
+ 	productHandler := handler.NewProductHandler(productUsecase)
+ 
+ 	orderRepo := postgres.NewOrderPostgres(db)
+-	orderUsecase := orderuc.NewOrderUsecase(orderRepo)
++	orderUsecase := usecase.NewOrderUsecase(orderRepo)
+ 	orderHandler := handler.NewOrderHandler(orderUsecase)
+ 
+ 	paymentRepo := postgres.NewPaymentPostgres(db)
+ 	gateway := payment.NewFakeGateway(cfg.WebhookSecret)
+-	paymentUsecase := paymentuc.NewPaymentUsecase(orderUsecase, paymentRepo, gateway)
++	paymentUsecase := usecase.NewPaymentUsecase(orderUsecase, paymentRepo, gateway)
+ 	paymentHandler := handler.NewPaymentHandler(paymentUsecase)
+ 
+-	expiryUsecase := orderuc.NewOrderExpiryUsecase(orderRepo, cfg.PaymentTTL, cfg.ExpiryBatch)
++	expiryUsecase := usecase.NewOrderExpiryUsecase(orderRepo, cfg.PaymentTTL, cfg.ExpiryBatch)
+ 	expiryWorker, err := worker.NewExpiryWorker(expiryUsecase, cfg.ExpiryInterval)
+ 	if err != nil {
+ 		return fmt.Errorf("gagal membuat pekerja kedaluwarsa: %w", err)
+diff --git a/internal/usecase/usecase.go b/internal/usecase/usecase.go
+new file mode 100644
+index 0000000..dd844ab
+--- /dev/null
++++ b/internal/usecase/usecase.go
+@@ -0,0 +1,24 @@
++package usecase
++
++import (
++	"toko-online/internal/usecase/auth"
++	"toko-online/internal/usecase/order"
++	"toko-online/internal/usecase/payment"
++	"toko-online/internal/usecase/product"
++)
++
++type (
++	AuthUsecase        = auth.AuthUsecase
++	ProductUsecase     = product.ProductUsecase
++	OrderUsecase       = order.OrderUsecase
++	OrderExpiryUsecase = order.OrderExpiryUsecase
++	PaymentUsecase     = payment.PaymentUsecase
++)
++
++var (
++	NewAuthUsecase        = auth.NewAuthUsecase
++	NewProductUsecase     = product.NewProductUsecase
++	NewOrderUsecase       = order.NewOrderUsecase
++	NewOrderExpiryUsecase = order.NewOrderExpiryUsecase
++	NewPaymentUsecase     = payment.NewPaymentUsecase
++)

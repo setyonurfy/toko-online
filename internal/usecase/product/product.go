@@ -1,9 +1,10 @@
-package usecase
+package product
 
 import (
 	"context"
 	"strings"
 	"toko-online/internal/domain"
+	"toko-online/internal/usecase/pagination"
 	"unicode/utf8"
 )
 
@@ -12,9 +13,6 @@ const (
 	maxDeskripsiProduk = 2000
 	maxHargaProduk     = 1_000_000_000
 	maxStokProduk      = 1_000_000
-
-	defaultListLimit = 20
-	maxListLimit     = 100
 )
 
 type ProductUsecase struct {
@@ -49,7 +47,7 @@ func (u *ProductUsecase) Get(ctx context.Context, id int64) (*domain.Product, er
 }
 
 func (u *ProductUsecase) List(ctx context.Context, limit, offset int) ([]domain.Product, error) {
-	limit, offset = normalizePage(limit, offset)
+	limit, offset = pagination.Normalize(limit, offset)
 	return u.products.List(ctx, limit, offset)
 }
 
