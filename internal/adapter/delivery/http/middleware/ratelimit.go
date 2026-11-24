@@ -98,3 +98,22 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+func (rl *RateLimiter) MiddlewareByUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, ok := UserIDFromContext(r.Context())
+		if !ok {
+			httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
+			return
+		}
+		diizinkan, tunggu := rl.Allow(strconv.FormatInt(id, 10))
+		if !diizinkan {
+			detik := int(math.Ceil(tunggu.Seconds()))
+			slog.Warn("rate limit menolak permintaan pengguna", "user_id", id, "path", r.URL.Path)
+			w.Header().Set("Retry-After", strconv.Itoa(detik))
+			httpx.WriteError(w, http.StatusTooManyRequests, "terlalu banyak permintaan, coba lagi nanti")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

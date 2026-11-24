@@ -147,3 +147,64 @@ func TestRateLimiter_Middleware(t *testing.T) {
 		t.Errorf("IP lain: status = %d, ingin 200", rec.Code)
 	}
 }
+
+func TestRateLimiter_MiddlewareByUser(t *testing.T) {
+	sekarang := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	rl := NewRateLimiter(60, 2)
+	rl.now = func() time.Time { return sekarang }
+
+	dipanggil := 0
+	h := rl.MiddlewareByUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dipanggil++
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	kirim := func(userID int64, remoteAddr string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/orders", nil)
+		req.RemoteAddr = remoteAddr
+		req = req.WithContext(WithUserID(req.Context(), userID))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := kirim(7, "1.1.1.1:1000"); rec.Code != http.StatusOK {
+		t.Fatalf("ke-1: status = %d, ingin 200", rec.Code)
+	}
+	if rec := kirim(7, "2.2.2.2:2000"); rec.Code != http.StatusOK {
+		t.Fatalf("ke-2 (IP lain, pengguna sama): status = %d, ingin 200", rec.Code)
+	}
+
+	rec := kirim(7, "3.3.3.3:3000")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("ke-3: status = %d, ingin 429 (ember dihitung per pengguna, bukan per IP)", rec.Code)
+	}
+	if got := rec.Result().Header.Get("Retry-After"); got != "1" {
+		t.Errorf("Retry-After = %q, ingin 1", got)
+	}
+	if dipanggil != 2 {
+		t.Errorf("handler dipanggil %d kali, ingin 2", dipanggil)
+	}
+
+	if rec := kirim(8, "1.1.1.1:1000"); rec.Code != http.StatusOK {
+		t.Errorf("pengguna lain, IP sama: status = %d, ingin 200", rec.Code)
+	}
+}
+
+func TestRateLimiter_MiddlewareByUser_TanpaPenggunaDitolak(t *testing.T) {
+	rl := NewRateLimiter(60, 2)
+	dipanggil := false
+	h := rl.MiddlewareByUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dipanggil = true
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/me", nil))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, ingin 401", rec.Code)
+	}
+	if dipanggil {
+		t.Error("handler tidak boleh dipanggil tanpa pengguna di context")
+	}
+}

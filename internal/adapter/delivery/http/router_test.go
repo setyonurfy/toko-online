@@ -49,12 +49,15 @@ func newTestRouter(svc *fakeAuth, produk product.ProductService, parser middlewa
 
 func newTestRouterLengkap(svc *fakeAuth, produk product.ProductService, pesanan order.OrderService, parser middleware.TokenParser) http.Handler {
 	return NewRouter(Dependencies{
-		Auth:        NewAuthHandler(svc),
-		Products:    NewProductHandler(produk),
-		Orders:      NewOrderHandler(pesanan),
-		Tokens:      parser,
-		Users:       svc,
-		AuthLimiter: NewRateLimiter(6000, 1000),
+		Auth:          NewAuthHandler(svc),
+		Products:      NewProductHandler(produk),
+		Orders:        NewOrderHandler(pesanan),
+		Tokens:        parser,
+		Users:         svc,
+		AuthLimiter:   NewRateLimiter(6000, 1000),
+		ReadLimiter:   NewRateLimiter(6000, 1000),
+		ActionLimiter: NewRateLimiter(6000, 1000),
+		AdminLimiter:  NewRateLimiter(6000, 1000),
 	})
 }
 

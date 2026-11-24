@@ -65,8 +65,14 @@ func run() error {
 	slog.Info("database terhubung")
 
 	authLimiter := handler.NewRateLimiter(10, 5) // 10 per menit, burst 5
+	readLimiter := handler.NewRateLimiter(120, 30)
+	actionLimiter := handler.NewRateLimiter(10, 5)
+	adminLimiter := handler.NewRateLimiter(30, 10)
 
 	authLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
+	readLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
+	actionLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
+	adminLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
 
 	userRepo := postgres.NewUserPostgres(db)
 	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
@@ -95,13 +101,16 @@ func run() error {
 	srv := &http.Server{
 		Addr: ":" + cfg.Port,
 		Handler: handler.NewRouter(handler.Dependencies{
-			Auth:        authHandler,
-			Products:    productHandler,
-			Orders:      orderHandler,
-			Payments:    paymentHandler,
-			Tokens:      tokens,
-			Users:       authUsecase,
-			AuthLimiter: authLimiter,
+			Auth:          authHandler,
+			Products:      productHandler,
+			Orders:        orderHandler,
+			Payments:      paymentHandler,
+			Tokens:        tokens,
+			Users:         authUsecase,
+			AuthLimiter:   authLimiter,
+			ReadLimiter:   readLimiter,
+			ActionLimiter: actionLimiter,
+			AdminLimiter:  adminLimiter,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

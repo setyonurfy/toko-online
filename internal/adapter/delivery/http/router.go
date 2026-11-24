@@ -14,39 +14,45 @@ import (
 )
 
 type Dependencies struct {
-	Auth        *auth.AuthHandler
-	Products    *product.ProductHandler
-	Orders      *order.OrderHandler
-	Tokens      middleware.TokenParser
-	Users       middleware.UserFinder
-	AuthLimiter *middleware.RateLimiter
-	Payments    *payment.PaymentHandler
+	Auth          *auth.AuthHandler
+	Products      *product.ProductHandler
+	Orders        *order.OrderHandler
+	Tokens        middleware.TokenParser
+	Users         middleware.UserFinder
+	AuthLimiter   *middleware.RateLimiter
+	ReadLimiter   *middleware.RateLimiter
+	ActionLimiter *middleware.RateLimiter
+	AdminLimiter  *middleware.RateLimiter
+	Payments      *payment.PaymentHandler
 }
 
 func NewRouter(d Dependencies) http.Handler {
 	mux := http.NewServeMux()
 
 	adminOnly := func(h http.HandlerFunc) http.Handler {
-		return middleware.Authenticate(d.Tokens, middleware.RequireRole(d.Users, domain.RoleAdmin, h))
+		return middleware.Authenticate(d.Tokens, d.AdminLimiter.MiddlewareByUser(middleware.RequireRole(d.Users, domain.RoleAdmin, h)))
 	}
-	loginOnly := func(h http.HandlerFunc) http.Handler {
-		return middleware.Authenticate(d.Tokens, h)
+	userRead := func(h http.HandlerFunc) http.Handler {
+		return middleware.Authenticate(d.Tokens, d.ReadLimiter.MiddlewareByUser(h))
+	}
+	userAction := func(h http.HandlerFunc) http.Handler {
+		return middleware.Authenticate(d.Tokens, d.ActionLimiter.MiddlewareByUser(h))
 	}
 
 	createProduct := adminOnly(d.Products.Create)
 	updateProduct := adminOnly(d.Products.Update)
 	deleteProduct := adminOnly(d.Products.Delete)
 
-	createOrder := loginOnly(d.Orders.Create)
-	listOrders := loginOnly(d.Orders.List)
-	getOrder := loginOnly(d.Orders.Get)
-	cancelOrder := loginOnly(d.Orders.Cancel)
-	payOrder := loginOnly(d.Payments.Pay)
+	createOrder := userAction(d.Orders.Create)
+	listOrders := userRead(d.Orders.List)
+	getOrder := userRead(d.Orders.Get)
+	cancelOrder := userAction(d.Orders.Cancel)
+	payOrder := userAction(d.Payments.Pay)
 
 	mux.HandleFunc("/health", healthHandler)
 	mux.Handle("/auth/register", d.AuthLimiter.Middleware(http.HandlerFunc(d.Auth.Register)))
 	mux.Handle("/auth/login", d.AuthLimiter.Middleware(http.HandlerFunc(d.Auth.Login)))
-	mux.Handle("/me", middleware.Authenticate(d.Tokens, http.HandlerFunc(d.Auth.Me)))
+	mux.Handle("/me", userRead(d.Auth.Me))
 
 	mux.HandleFunc("/products", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
