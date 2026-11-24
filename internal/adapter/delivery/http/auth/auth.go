@@ -49,6 +49,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	user, err := h.auth.Register(r.Context(), req.Nama, req.Email, req.Password)
 	if err != nil {
 		httpx.WriteUsecaseError(w, err)
+		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, user)
 }
