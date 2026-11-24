@@ -1,4 +1,6 @@
 #!/bin/sh
+. ./load-env.sh
+
 SECRET_FILE=".jwt_secret"
 
 if [ -z "${JWT_SECRET:-}" ]; then

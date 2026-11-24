@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+. ./load-env.sh
+
 TEST_DB="toko_online_test"
 export TEST_DATABASE_URL="postgres://localhost:5432/$TEST_DB?sslmode=disable"
 

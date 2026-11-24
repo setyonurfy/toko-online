@@ -2,6 +2,8 @@
 # Pembungkus golang-migrate untuk proyek toko-online.
 set -eu
 
+. ./load-env.sh
+
 DB_URL="${DATABASE_URL:-postgres://localhost:5432/toko_online?sslmode=disable}"
 DIR="migrations"
 
