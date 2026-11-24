@@ -4,7 +4,7 @@ set -eu
 
 . ./load-env.sh
 
-DB_URL="${DATABASE_URL:-postgres://localhost:5432/toko_online?sslmode=disable}"
+DB_URL="${DATABASE_URL:?DATABASE_URL belum diisi, isi di .env}"
 DIR="migrations"
 
 export PATH="$PATH:$(go env GOPATH)/bin"

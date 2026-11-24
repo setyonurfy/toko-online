@@ -10,6 +10,8 @@ func aturEnv(t *testing.T, ttl, interval, batch string) {
 	t.Setenv("ORDER_PAYMENT_TTL", ttl)
 	t.Setenv("ORDER_EXPIRY_INTERVAL", interval)
 	t.Setenv("ORDER_EXPIRY_BATCH", batch)
+	t.Setenv("PORT", "8080")
+	t.Setenv("DATABASE_URL", "postgres://localhost:5432/toko_online?sslmode=disable")
 }
 
 func TestLoad_NilaiBawawanKedaluwarsa(t *testing.T) {
