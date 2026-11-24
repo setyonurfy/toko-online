@@ -14,13 +14,13 @@ import (
 	"time"
 
 	handler "toko-online/internal/adapter/delivery/http"
+	"toko-online/internal/adapter/delivery/worker"
 	"toko-online/internal/adapter/repository/postgres"
 	"toko-online/internal/infrastructure/auth"
 	"toko-online/internal/infrastructure/config"
 	"toko-online/internal/infrastructure/database"
 	"toko-online/internal/infrastructure/logging"
 	"toko-online/internal/infrastructure/payment"
-	"toko-online/internal/infrastructure/worker"
 	"toko-online/internal/usecase"
 )
 
