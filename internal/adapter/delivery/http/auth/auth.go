@@ -76,7 +76,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
-		httpx.WriteError(w, http.StatusMethodNotAllowed, "method tdak diizinkan")
+		httpx.WriteError(w, http.StatusMethodNotAllowed, "method tidak diizinkan")
 		return
 	}
 

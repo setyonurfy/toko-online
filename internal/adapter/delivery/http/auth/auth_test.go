@@ -160,3 +160,21 @@ func TestRegisterHandler_BodyTerlaluBesar(t *testing.T) {
 		t.Fatalf("status = %d, ingin 413", rec.Code)
 	}
 }
+
+func TestMeHandler_MethodSalah(t *testing.T) {
+	h := NewAuthHandler(&fakeAuth{})
+	req := httptest.NewRequest(http.MethodPost, "/me", nil)
+	rec := httptest.NewRecorder()
+
+	h.Me(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, ingin %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	if !strings.Contains(rec.Body.String(), "method tidak diizinkan") {
+		t.Errorf("body = %s, ingin memuat %q", rec.Body.String(), "method tidak diizinkan")
+	}
+	if got := rec.Header().Get("Allow"); got != http.MethodGet {
+		t.Errorf("Allow = %q, ingin %q", got, http.MethodGet)
+	}
+}

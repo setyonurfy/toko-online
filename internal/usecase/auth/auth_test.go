@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"toko-online/internal/domain"
 
@@ -77,6 +78,10 @@ func TestRegister(t *testing.T) {
 		{"nama kosong", "", "jhondoe@mail.com", "pass12345", domain.ErrInvalidInput},
 		{"email salah format", "john doe", "bukan-email", "pass12345", domain.ErrInvalidInput},
 		{"password terlalu pendek", "john doe", "jhondoe@mail.com", "pass", domain.ErrInvalidInput},
+		{"nama tepat 100 karakter", strings.Repeat("a", 100), "jhondoe@mail.com", "pass12345", nil},
+		{"nama 100 karakter multibyte", strings.Repeat("é", 100), "jhondoe@mail.com", "pass12345", nil},
+		{"nama 101 karakter", strings.Repeat("a", 101), "jhondoe@mail.com", "pass12345", domain.ErrInvalidInput},
+		{"email lebih dari 255 karakter", "john doe", strings.Repeat("a", 250) + "@mail.com", "pass12345", domain.ErrInvalidInput},
 	}
 
 	for _, tt := range tests {

@@ -7,8 +7,14 @@ import (
 	"net/mail"
 	"strings"
 	"toko-online/internal/domain"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
+)
+
+const (
+	maxNama  = 100
+	maxEmail = 255
 )
 
 type TokenIssuer interface {
@@ -52,7 +58,10 @@ func (a *AuthUsecase) Register(ctx context.Context, nama, email, password string
 	nama = strings.TrimSpace(nama)
 	email = strings.ToLower(strings.TrimSpace(email))
 
-	if nama == "" || len(password) < 8 || len(password) > 70 {
+	if nama == "" || utf8.RuneCountInString(nama) > maxNama || len(password) < 8 || len(password) > 70 {
+		return nil, domain.ErrInvalidInput
+	}
+	if utf8.RuneCountInString(email) > maxEmail {
 		return nil, domain.ErrInvalidInput
 	}
 	addr, err := mail.ParseAddress(email)
