@@ -1,4 +1,4 @@
-package handler
+package order
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"toko-online/internal/adapter/delivery/http/middleware"
 	"toko-online/internal/domain"
 )
 
@@ -52,7 +53,7 @@ func (f *fakeOrders) ListMine(ctx context.Context, userID int64, limit, offset i
 func kirimSebagai(h http.HandlerFunc, userID int64, method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	if userID != 0 {
-		req = req.WithContext(context.WithValue(req.Context(), ctxKey{}, userID))
+		req = req.WithContext(middleware.WithUserID(req.Context(), userID))
 	}
 	rec := httptest.NewRecorder()
 	h(rec, req)

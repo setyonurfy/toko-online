@@ -1,4 +1,4 @@
-package handler
+package middleware
 
 import (
 	"context"
@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"toko-online/internal/adapter/delivery/http/httpx"
 	"toko-online/internal/domain"
 )
 
@@ -21,23 +23,27 @@ func UserIDFromContext(ctx context.Context) (int64, bool) {
 	return id, ok
 }
 
+func WithUserID(ctx context.Context, id int64) context.Context {
+	return context.WithValue(ctx, ctxKey{}, id)
+}
+
 func Authenticate(tokens TokenParser, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		scheme, token, found := strings.Cut(r.Header.Get("Authorization"), " ")
 		if !found || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			writeError(w, http.StatusUnauthorized, "token tidak ditemukan")
+			httpx.WriteError(w, http.StatusUnauthorized, "token tidak ditemukan")
 			return
 		}
 
 		id, err := tokens.Parse(strings.TrimSpace(token))
 		if err != nil {
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			writeError(w, http.StatusUnauthorized, "token tidak valid atau kadaluwarsa")
+			httpx.WriteError(w, http.StatusUnauthorized, "token tidak valid atau kadaluwarsa")
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), ctxKey{}, id)
+		ctx := WithUserID(r.Context(), id)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -50,21 +56,21 @@ func RequireRole(users UserFinder, role domain.Role, next http.Handler) http.Han
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := UserIDFromContext(r.Context())
 		if !ok {
-			writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+			httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
 			return
 		}
 		user, err := users.Profile(r.Context(), id)
 		if err != nil {
 			if errors.Is(err, domain.ErrUserNotFound) {
-				writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+				httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
 				return
 			}
 			slog.Error("cek role gagal", "error", err)
-			writeError(w, http.StatusInternalServerError, "terjadi kesalahan")
+			httpx.WriteError(w, http.StatusInternalServerError, "terjadi kesalahan")
 			return
 		}
 		if user.Role != role {
-			writeError(w, http.StatusForbidden, "akses ditolak")
+			httpx.WriteError(w, http.StatusForbidden, "akses ditolak")
 			return
 		}
 		next.ServeHTTP(w, r)

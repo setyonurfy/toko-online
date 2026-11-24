@@ -1,4 +1,4 @@
-package handler
+package auth
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
 	"toko-online/internal/domain"
 )
 

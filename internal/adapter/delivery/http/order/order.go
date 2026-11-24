@@ -1,12 +1,13 @@
-package handler
+package order
 
 import (
 	"context"
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
+	"toko-online/internal/adapter/delivery/http/httpx"
+	"toko-online/internal/adapter/delivery/http/middleware"
 	"toko-online/internal/domain"
 )
 
@@ -39,14 +40,14 @@ type orderListResponse struct {
 }
 
 func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromContext(r.Context())
+	userID, ok := middleware.UserIDFromContext(r.Context())
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+		httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
 		return
 	}
 
 	var req orderRequest
-	if !decodeJSON(w, r, &req) {
+	if !httpx.DecodeJSON(w, r, &req) {
 		return
 	}
 
@@ -58,105 +59,84 @@ func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
 	order, err := h.orders.Place(r.Context(), userID, lines)
 	if err != nil {
 		if errors.Is(err, domain.ErrProductNotFound) {
-			writeError(w, http.StatusUnprocessableEntity, "salah satu produk dalam pesanan tidak ditemukan")
+			httpx.WriteError(w, http.StatusUnprocessableEntity, "salah satu produk dalam pesanan tidak ditemukan")
 			return
 		}
-		writeUsecaseError(w, err)
+		httpx.WriteUsecaseError(w, err)
 		return
 	}
 
 	w.Header().Set("Location", "/orders/"+strconv.FormatInt(order.ID, 10))
-	writeJSON(w, http.StatusCreated, order)
+	httpx.WriteJSON(w, http.StatusCreated, order)
 }
 
 func (h *OrderHandler) Get(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromContext(r.Context())
+	userID, ok := middleware.UserIDFromContext(r.Context())
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+		httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
 		return
 	}
 
-	orderID, ok := idFromPath(r.URL.Path, "/orders/")
+	orderID, ok := httpx.IDFromPath(r.URL.Path, "/orders/")
 	if !ok {
-		writeError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
+		httpx.WriteError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
 		return
 	}
 
 	order, err := h.orders.Get(r.Context(), userID, orderID)
 	if err != nil {
-		writeUsecaseError(w, err)
+		httpx.WriteUsecaseError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, order)
+	httpx.WriteJSON(w, http.StatusOK, order)
 }
 
 func (h *OrderHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromContext(r.Context())
+	userID, ok := middleware.UserIDFromContext(r.Context())
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+		httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
 		return
 	}
 
-	limit, err := queryInt(r, "limit")
+	limit, err := httpx.QueryInt(r, "limit")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "limit harus berupa angka")
+		httpx.WriteError(w, http.StatusBadRequest, "limit harus berupa angka")
 		return
 	}
-	offset, err := queryInt(r, "offset")
+	offset, err := httpx.QueryInt(r, "offset")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "offset harus berupa angka")
+		httpx.WriteError(w, http.StatusBadRequest, "offset harus berupa angka")
 		return
 	}
 
 	pesanan, err := h.orders.ListMine(r.Context(), userID, limit, offset)
 	if err != nil {
-		writeUsecaseError(w, err)
+		httpx.WriteUsecaseError(w, err)
 		return
 	}
 	if pesanan == nil {
 		pesanan = []domain.Order{}
 	}
-	writeJSON(w, http.StatusOK, orderListResponse{Data: pesanan})
+	httpx.WriteJSON(w, http.StatusOK, orderListResponse{Data: pesanan})
 }
 
 func (h *OrderHandler) Cancel(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromContext(r.Context())
+	userID, ok := middleware.UserIDFromContext(r.Context())
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+		httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
 		return
 	}
 
-	orderID, ok := idFromPathDenganAkhiran(r.URL.Path, "/orders/", "/cancel")
+	orderID, ok := httpx.IDFromPathDenganAkhiran(r.URL.Path, "/orders/", "/cancel")
 	if !ok {
-		writeError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
+		httpx.WriteError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
 		return
 	}
 
 	order, err := h.orders.Cancel(r.Context(), userID, orderID)
 	if err != nil {
-		writeUsecaseError(w, err)
+		httpx.WriteUsecaseError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, order)
-}
-
-// idFromPath mengambil ID dari path berbentuk "<prefix><id>" secara ketat:
-// hanya angka desimal baku ("5" sah; "05", "+5", "5/x", "abc" ditolak).
-func idFromPath(path, prefix string) (int64, bool) {
-	raw := strings.TrimPrefix(path, prefix)
-	if raw == "" || strings.Contains(raw, "/") {
-		return 0, false
-	}
-	id, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || id <= 0 || strconv.FormatInt(id, 10) != raw {
-		return 0, false
-	}
-	return id, true
-}
-
-func idFromPathDenganAkhiran(path, prefix, akhiran string) (int64, bool) {
-	if !strings.HasSuffix(path, akhiran) {
-		return 0, false
-	}
-	return idFromPath(strings.TrimSuffix(path, akhiran), prefix)
+	httpx.WriteJSON(w, http.StatusOK, order)
 }

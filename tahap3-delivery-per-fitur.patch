@@ -1,0 +1,1990 @@
+diff --git a/internal/adapter/delivery/http/auth/auth.go b/internal/adapter/delivery/http/auth/auth.go
+new file mode 100644
+index 0000000..739cc87
+--- /dev/null
++++ b/internal/adapter/delivery/http/auth/auth.go
+@@ -0,0 +1,94 @@
++package auth
++
++import (
++	"context"
++	"net/http"
++
++	"toko-online/internal/adapter/delivery/http/httpx"
++	"toko-online/internal/adapter/delivery/http/middleware"
++	"toko-online/internal/domain"
++)
++
++type AuthService interface {
++	Register(ctx context.Context, nama, email, password string) (*domain.User, error)
++	Login(ctx context.Context, email, password string) (*domain.LoginResult, error)
++	Profile(ctx context.Context, id int64) (*domain.User, error)
++}
++
++type AuthHandler struct {
++	auth AuthService
++}
++
++func NewAuthHandler(auth AuthService) *AuthHandler {
++	return &AuthHandler{auth: auth}
++}
++
++type registerRequest struct {
++	Nama     string `json:"nama"`
++	Email    string `json:"email"`
++	Password string `json:"password"`
++}
++
++type loginRequest struct {
++	Email    string `json:"email"`
++	Password string `json:"password"`
++}
++
++func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
++	if r.Method != http.MethodPost {
++		w.Header().Set("Allow", http.MethodPost)
++		httpx.WriteError(w, http.StatusMethodNotAllowed, "method tidak diizinkan")
++		return
++	}
++
++	var req registerRequest
++	if !httpx.DecodeJSON(w, r, &req) {
++		return
++	}
++
++	user, err := h.auth.Register(r.Context(), req.Nama, req.Email, req.Password)
++	if err != nil {
++		httpx.WriteUsecaseError(w, err)
++	}
++	httpx.WriteJSON(w, http.StatusCreated, user)
++}
++
++func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
++	if r.Method != http.MethodPost {
++		w.Header().Set("Allow", http.MethodPost)
++		httpx.WriteError(w, http.StatusMethodNotAllowed, "method tidak diizinkan")
++		return
++	}
++	var req loginRequest
++	if !httpx.DecodeJSON(w, r, &req) {
++		return
++	}
++
++	result, err := h.auth.Login(r.Context(), req.Email, req.Password)
++	if err != nil {
++		httpx.WriteUsecaseError(w, err)
++		return
++	}
++	httpx.WriteJSON(w, http.StatusOK, result)
++}
++
++func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
++	if r.Method != http.MethodGet {
++		w.Header().Set("Allow", http.MethodGet)
++		httpx.WriteError(w, http.StatusMethodNotAllowed, "method tdak diizinkan")
++		return
++	}
++
++	id, ok := middleware.UserIDFromContext(r.Context())
++	if !ok {
++		httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
++		return
++	}
++
++	user, err := h.auth.Profile(r.Context(), id)
++	if err != nil {
++		httpx.WriteUsecaseError(w, err)
++		return
++	}
++	httpx.WriteJSON(w, http.StatusOK, user)
++}
+diff --git a/internal/adapter/delivery/http/auth_handler_test.go b/internal/adapter/delivery/http/auth/auth_test.go
+similarity index 99%
+rename from internal/adapter/delivery/http/auth_handler_test.go
+rename to internal/adapter/delivery/http/auth/auth_test.go
+index 9cb6d2f..605b35f 100644
+--- a/internal/adapter/delivery/http/auth_handler_test.go
++++ b/internal/adapter/delivery/http/auth/auth_test.go
+@@ -1,4 +1,4 @@
+-package handler
++package auth
+ 
+ import (
+ 	"context"
+@@ -7,6 +7,7 @@ import (
+ 	"net/http/httptest"
+ 	"strings"
+ 	"testing"
++
+ 	"toko-online/internal/domain"
+ )
+ 
+diff --git a/internal/adapter/delivery/http/auth_handler.go b/internal/adapter/delivery/http/auth_handler.go
+deleted file mode 100644
+index 1250ce1..0000000
+--- a/internal/adapter/delivery/http/auth_handler.go
++++ /dev/null
+@@ -1,129 +0,0 @@
+-package handler
+-
+-import (
+-	"context"
+-	"errors"
+-	"log/slog"
+-	"net/http"
+-	"toko-online/internal/domain"
+-)
+-
+-type AuthService interface {
+-	Register(ctx context.Context, nama, email, password string) (*domain.User, error)
+-	Login(ctx context.Context, email, password string) (*domain.LoginResult, error)
+-	Profile(ctx context.Context, id int64) (*domain.User, error)
+-}
+-
+-type AuthHandler struct {
+-	auth AuthService
+-}
+-
+-func NewAuthHandler(auth AuthService) *AuthHandler {
+-	return &AuthHandler{auth: auth}
+-}
+-
+-type registerRequest struct {
+-	Nama     string `json:"nama"`
+-	Email    string `json:"email"`
+-	Password string `json:"password"`
+-}
+-
+-type loginRequest struct {
+-	Email    string `json:"email"`
+-	Password string `json:"password"`
+-}
+-
+-func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
+-	if r.Method != http.MethodPost {
+-		w.Header().Set("Allow", http.MethodPost)
+-		writeError(w, http.StatusMethodNotAllowed, "method tidak diizinkan")
+-		return
+-	}
+-
+-	var req registerRequest
+-	if !decodeJSON(w, r, &req) {
+-		return
+-	}
+-
+-	user, err := h.auth.Register(r.Context(), req.Nama, req.Email, req.Password)
+-	if err != nil {
+-		writeUsecaseError(w, err)
+-	}
+-	writeJSON(w, http.StatusCreated, user)
+-}
+-
+-func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+-	if r.Method != http.MethodPost {
+-		w.Header().Set("Allow", http.MethodPost)
+-		writeError(w, http.StatusMethodNotAllowed, "method tidak diizinkan")
+-		return
+-	}
+-	var req loginRequest
+-	if !decodeJSON(w, r, &req) {
+-		return
+-	}
+-
+-	result, err := h.auth.Login(r.Context(), req.Email, req.Password)
+-	if err != nil {
+-		writeUsecaseError(w, err)
+-		return
+-	}
+-	writeJSON(w, http.StatusOK, result)
+-}
+-
+-func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
+-	if r.Method != http.MethodGet {
+-		w.Header().Set("Allow", http.MethodGet)
+-		writeError(w, http.StatusMethodNotAllowed, "method tdak diizinkan")
+-		return
+-	}
+-
+-	id, ok := UserIDFromContext(r.Context())
+-	if !ok {
+-		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+-		return
+-	}
+-
+-	user, err := h.auth.Profile(r.Context(), id)
+-	if err != nil {
+-		writeUsecaseError(w, err)
+-		return
+-	}
+-	writeJSON(w, http.StatusOK, user)
+-}
+-
+-func writeUsecaseError(w http.ResponseWriter, err error) {
+-	switch {
+-	case errors.Is(err, domain.ErrInvalidInput):
+-		writeError(w, http.StatusBadRequest, err.Error())
+-	case errors.Is(err, domain.ErrEmailAlreadyUsed):
+-		writeError(w, http.StatusConflict, err.Error())
+-	case errors.Is(err, domain.ErrInvalidCredentials):
+-		writeError(w, http.StatusUnauthorized, err.Error())
+-	case errors.Is(err, domain.ErrUserNotFound):
+-		writeError(w, http.StatusNotFound, err.Error())
+-	case errors.Is(err, domain.ErrProductNotFound):
+-		writeError(w, http.StatusNotFound, err.Error())
+-	case errors.Is(err, domain.ErrProductInUse):
+-		writeError(w, http.StatusConflict, err.Error())
+-	case errors.Is(err, domain.ErrOrderNotFound):
+-		writeError(w, http.StatusNotFound, err.Error())
+-	case errors.Is(err, domain.ErrInsufficientStock):
+-		writeError(w, http.StatusConflict, err.Error())
+-	case errors.Is(err, domain.ErrOrderNotCancellable):
+-		writeError(w, http.StatusConflict, err.Error())
+-	case errors.Is(err, domain.ErrOrderNotPayable):
+-		writeError(w, http.StatusConflict, err.Error())
+-	case errors.Is(err, domain.ErrPaymentNotFound):
+-		writeError(w, http.StatusNotFound, err.Error())
+-	case errors.Is(err, domain.ErrAmountMismatch):
+-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+-	case errors.Is(err, domain.ErrInvalidSignature), errors.Is(err, domain.ErrStaleWebhook):
+-		writeError(w, http.StatusUnauthorized, err.Error())
+-	case errors.Is(err, domain.ErrMalformedWebhook):
+-		writeError(w, http.StatusBadRequest, err.Error())
+-	default:
+-		slog.Error("error internal", "error", err)
+-		writeError(w, http.StatusInternalServerError, "terjadi kesalahan pada server")
+-	}
+-}
+diff --git a/internal/adapter/delivery/http/fakes_test.go b/internal/adapter/delivery/http/fakes_test.go
+new file mode 100644
+index 0000000..73f61f2
+--- /dev/null
++++ b/internal/adapter/delivery/http/fakes_test.go
+@@ -0,0 +1,136 @@
++package handler
++
++import (
++	"context"
++	"slices"
++
++	"toko-online/internal/domain"
++)
++
++type fakeAuth struct {
++	user *domain.User
++	err  error
++}
++
++func (f *fakeAuth) Register(ctx context.Context, nama, email, password string) (*domain.User, error) {
++	return f.user, f.err
++}
++func (f *fakeAuth) Login(ctx context.Context, email, password string) (*domain.LoginResult, error) {
++	if f.err != nil {
++		return nil, f.err
++	}
++	return &domain.LoginResult{User: f.user, Token: "token-palsu"}, nil
++}
++func (f *fakeAuth) Profile(ctx context.Context, id int64) (*domain.User, error) {
++	return f.user, f.err
++}
++
++type fakeProducts struct {
++	product *domain.Product
++	list    []domain.Product
++	err     error
++
++	dipanggil           bool
++	gotID               int64
++	gotLimit, gotOffset int
++	gotStok             int
++}
++
++func (f *fakeProducts) Create(ctx context.Context, nama, deskripsi string, harga int64, stok int) (*domain.Product, error) {
++	f.dipanggil = true
++	f.gotStok = stok
++	return f.product, f.err
++}
++
++func (f *fakeProducts) Get(ctx context.Context, id int64) (*domain.Product, error) {
++	f.dipanggil = true
++	f.gotID = id
++	return f.product, f.err
++}
++
++func (f *fakeProducts) List(ctx context.Context, limit, offset int) ([]domain.Product, error) {
++	f.dipanggil = true
++	f.gotLimit, f.gotOffset = limit, offset
++	return f.list, f.err
++}
++
++func (f *fakeProducts) Update(ctx context.Context, id int64, nama, deskripsi string, harga int64, stok int) (*domain.Product, error) {
++	f.dipanggil = true
++	f.gotID = id
++	f.gotStok = stok
++	return f.product, f.err
++}
++
++func (f *fakeProducts) Delete(ctx context.Context, id int64) error {
++	f.dipanggil = true
++	f.gotID = id
++	return f.err
++}
++
++type fakeOrders struct {
++	order *domain.Order
++	list  []domain.Order
++	err   error
++
++	dipanggil           bool
++	gotUserID           int64
++	gotOrderID          int64
++	gotLines            []domain.OrderLine
++	gotLimit, gotOffset int
++}
++
++func (f *fakeOrders) Place(ctx context.Context, userID int64, lines []domain.OrderLine) (*domain.Order, error) {
++	f.dipanggil = true
++	f.gotUserID = userID
++	f.gotLines = slices.Clone(lines)
++	return f.order, f.err
++}
++
++func (f *fakeOrders) Get(ctx context.Context, userID, orderID int64) (*domain.Order, error) {
++	f.dipanggil = true
++	f.gotUserID = userID
++	f.gotOrderID = orderID
++	return f.order, f.err
++}
++
++func (f *fakeOrders) ListMine(ctx context.Context, userID int64, limit, offset int) ([]domain.Order, error) {
++	f.dipanggil = true
++	f.gotUserID = userID
++	f.gotLimit, f.gotOffset = limit, offset
++	return f.list, f.err
++}
++
++func (f *fakeOrders) Cancel(ctx context.Context, userID, orderID int64) (*domain.Order, error) {
++	f.dipanggil = true
++	f.gotUserID = userID
++	f.gotOrderID = orderID
++	return f.order, f.err
++}
++
++type fakePayments struct {
++	payment *domain.Payment
++	outcome domain.PaymentOutcome
++	err     error
++
++	dipanggil    bool
++	gotUserID    int64
++	gotOrderID   int64
++	gotBody      []byte
++	gotTimestamp string
++	gotSignature string
++}
++
++func (f *fakePayments) Pay(ctx context.Context, userID, orderID int64) (*domain.Payment, error) {
++	f.dipanggil = true
++	f.gotUserID = userID
++	f.gotOrderID = orderID
++	return f.payment, f.err
++}
++
++func (f *fakePayments) HandleWebhook(ctx context.Context, body []byte, timestamp, signature string) (domain.PaymentOutcome, error) {
++	f.dipanggil = true
++	f.gotBody = append([]byte(nil), body...)
++	f.gotTimestamp = timestamp
++	f.gotSignature = signature
++	return f.outcome, f.err
++}
+diff --git a/internal/adapter/delivery/http/handler.go b/internal/adapter/delivery/http/handler.go
+new file mode 100644
+index 0000000..bcb753d
+--- /dev/null
++++ b/internal/adapter/delivery/http/handler.go
+@@ -0,0 +1,17 @@
++package handler
++
++import (
++	"toko-online/internal/adapter/delivery/http/auth"
++	"toko-online/internal/adapter/delivery/http/middleware"
++	"toko-online/internal/adapter/delivery/http/order"
++	"toko-online/internal/adapter/delivery/http/payment"
++	"toko-online/internal/adapter/delivery/http/product"
++)
++
++var (
++	NewAuthHandler    = auth.NewAuthHandler
++	NewProductHandler = product.NewProductHandler
++	NewOrderHandler   = order.NewOrderHandler
++	NewPaymentHandler = payment.NewPaymentHandler
++	NewRateLimiter    = middleware.NewRateLimiter
++)
+diff --git a/internal/adapter/delivery/http/httpx/error.go b/internal/adapter/delivery/http/httpx/error.go
+new file mode 100644
+index 0000000..511d433
+--- /dev/null
++++ b/internal/adapter/delivery/http/httpx/error.go
+@@ -0,0 +1,45 @@
++package httpx
++
++import (
++	"errors"
++	"log/slog"
++	"net/http"
++
++	"toko-online/internal/domain"
++)
++
++func WriteUsecaseError(w http.ResponseWriter, err error) {
++	switch {
++	case errors.Is(err, domain.ErrInvalidInput):
++		WriteError(w, http.StatusBadRequest, err.Error())
++	case errors.Is(err, domain.ErrEmailAlreadyUsed):
++		WriteError(w, http.StatusConflict, err.Error())
++	case errors.Is(err, domain.ErrInvalidCredentials):
++		WriteError(w, http.StatusUnauthorized, err.Error())
++	case errors.Is(err, domain.ErrUserNotFound):
++		WriteError(w, http.StatusNotFound, err.Error())
++	case errors.Is(err, domain.ErrProductNotFound):
++		WriteError(w, http.StatusNotFound, err.Error())
++	case errors.Is(err, domain.ErrProductInUse):
++		WriteError(w, http.StatusConflict, err.Error())
++	case errors.Is(err, domain.ErrOrderNotFound):
++		WriteError(w, http.StatusNotFound, err.Error())
++	case errors.Is(err, domain.ErrInsufficientStock):
++		WriteError(w, http.StatusConflict, err.Error())
++	case errors.Is(err, domain.ErrOrderNotCancellable):
++		WriteError(w, http.StatusConflict, err.Error())
++	case errors.Is(err, domain.ErrOrderNotPayable):
++		WriteError(w, http.StatusConflict, err.Error())
++	case errors.Is(err, domain.ErrPaymentNotFound):
++		WriteError(w, http.StatusNotFound, err.Error())
++	case errors.Is(err, domain.ErrAmountMismatch):
++		WriteError(w, http.StatusUnprocessableEntity, err.Error())
++	case errors.Is(err, domain.ErrInvalidSignature), errors.Is(err, domain.ErrStaleWebhook):
++		WriteError(w, http.StatusUnauthorized, err.Error())
++	case errors.Is(err, domain.ErrMalformedWebhook):
++		WriteError(w, http.StatusBadRequest, err.Error())
++	default:
++		slog.Error("error internal", "error", err)
++		WriteError(w, http.StatusInternalServerError, "terjadi kesalahan pada server")
++	}
++}
+diff --git a/internal/adapter/delivery/http/httpx/request.go b/internal/adapter/delivery/http/httpx/request.go
+new file mode 100644
+index 0000000..07ac17f
+--- /dev/null
++++ b/internal/adapter/delivery/http/httpx/request.go
+@@ -0,0 +1,66 @@
++package httpx
++
++import (
++	"encoding/json"
++	"errors"
++	"log/slog"
++	"net"
++	"net/http"
++	"strconv"
++	"strings"
++)
++
++func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
++	r.Body = http.MaxBytesReader(w, r.Body, 1<<14) // 16 KB
++	dec := json.NewDecoder(r.Body)
++	dec.DisallowUnknownFields()
++
++	if err := dec.Decode(dst); err != nil {
++		var terlaluBesar *http.MaxBytesError
++		if errors.As(err, &terlaluBesar) {
++			WriteError(w, http.StatusRequestEntityTooLarge, "body terlalu besar")
++			return false
++		}
++		slog.Info("decode json gagal", "error", err)
++		WriteError(w, http.StatusBadRequest, "body JSON tidak valid")
++		return false
++	}
++	return true
++}
++
++func QueryInt(r *http.Request, key string) (int, error) {
++	raw := r.URL.Query().Get(key)
++	if raw == "" {
++		return 0, nil
++	}
++	return strconv.Atoi(raw)
++}
++
++// IDFromPath mengambil ID dari path berbentuk "<prefix><id>" secara ketat:
++// hanya angka desimal baku ("5" sah; "05", "+5", "5/x", "abc" ditolak).
++func IDFromPath(path, prefix string) (int64, bool) {
++	raw := strings.TrimPrefix(path, prefix)
++	if raw == "" || strings.Contains(raw, "/") {
++		return 0, false
++	}
++	id, err := strconv.ParseInt(raw, 10, 64)
++	if err != nil || id <= 0 || strconv.FormatInt(id, 10) != raw {
++		return 0, false
++	}
++	return id, true
++}
++
++func IDFromPathDenganAkhiran(path, prefix, akhiran string) (int64, bool) {
++	if !strings.HasSuffix(path, akhiran) {
++		return 0, false
++	}
++	return IDFromPath(strings.TrimSuffix(path, akhiran), prefix)
++}
++
++func ClientIP(r *http.Request) string {
++	host, _, err := net.SplitHostPort(r.RemoteAddr)
++	if err != nil {
++		return r.RemoteAddr
++	}
++	return host
++}
+diff --git a/internal/adapter/delivery/http/httpx/response.go b/internal/adapter/delivery/http/httpx/response.go
+new file mode 100644
+index 0000000..aeee83a
+--- /dev/null
++++ b/internal/adapter/delivery/http/httpx/response.go
+@@ -0,0 +1,30 @@
++package httpx
++
++import (
++	"encoding/json"
++	"log/slog"
++	"net/http"
++	"strings"
++)
++
++type errorResponse struct {
++	Error string `json:"error"`
++}
++
++func WriteJSON(w http.ResponseWriter, status int, data any) {
++	w.Header().Set("Content-type", "application/json")
++	w.WriteHeader(status)
++
++	if err := json.NewEncoder(w).Encode(data); err != nil {
++		slog.Error("response gagal", "error", err)
++	}
++}
++
++func WriteError(w http.ResponseWriter, status int, msg string) {
++	WriteJSON(w, status, errorResponse{Error: msg})
++}
++
++func MethodNotAllowed(w http.ResponseWriter, allowed ...string) {
++	w.Header().Set("Allow", strings.Join(allowed, ", "))
++	WriteError(w, http.StatusMethodNotAllowed, "method tidak diizinkan")
++}
+diff --git a/internal/adapter/delivery/http/middleware.go b/internal/adapter/delivery/http/middleware/auth.go
+similarity index 68%
+rename from internal/adapter/delivery/http/middleware.go
+rename to internal/adapter/delivery/http/middleware/auth.go
+index 60c6aa9..7e346e5 100644
+--- a/internal/adapter/delivery/http/middleware.go
++++ b/internal/adapter/delivery/http/middleware/auth.go
+@@ -1,4 +1,4 @@
+-package handler
++package middleware
+ 
+ import (
+ 	"context"
+@@ -6,6 +6,8 @@ import (
+ 	"log/slog"
+ 	"net/http"
+ 	"strings"
++
++	"toko-online/internal/adapter/delivery/http/httpx"
+ 	"toko-online/internal/domain"
+ )
+ 
+@@ -21,23 +23,27 @@ func UserIDFromContext(ctx context.Context) (int64, bool) {
+ 	return id, ok
+ }
+ 
++func WithUserID(ctx context.Context, id int64) context.Context {
++	return context.WithValue(ctx, ctxKey{}, id)
++}
++
+ func Authenticate(tokens TokenParser, next http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 		scheme, token, found := strings.Cut(r.Header.Get("Authorization"), " ")
+ 		if !found || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
+ 			w.Header().Set("WWW-Authenticate", "Bearer")
+-			writeError(w, http.StatusUnauthorized, "token tidak ditemukan")
++			httpx.WriteError(w, http.StatusUnauthorized, "token tidak ditemukan")
+ 			return
+ 		}
+ 
+ 		id, err := tokens.Parse(strings.TrimSpace(token))
+ 		if err != nil {
+ 			w.Header().Set("WWW-Authenticate", "Bearer")
+-			writeError(w, http.StatusUnauthorized, "token tidak valid atau kadaluwarsa")
++			httpx.WriteError(w, http.StatusUnauthorized, "token tidak valid atau kadaluwarsa")
+ 			return
+ 		}
+ 
+-		ctx := context.WithValue(r.Context(), ctxKey{}, id)
++		ctx := WithUserID(r.Context(), id)
+ 		next.ServeHTTP(w, r.WithContext(ctx))
+ 	})
+ }
+@@ -50,21 +56,21 @@ func RequireRole(users UserFinder, role domain.Role, next http.Handler) http.Han
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+ 		id, ok := UserIDFromContext(r.Context())
+ 		if !ok {
+-			writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
++			httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
+ 			return
+ 		}
+ 		user, err := users.Profile(r.Context(), id)
+ 		if err != nil {
+ 			if errors.Is(err, domain.ErrUserNotFound) {
+-				writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
++				httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
+ 				return
+ 			}
+ 			slog.Error("cek role gagal", "error", err)
+-			writeError(w, http.StatusInternalServerError, "terjadi kesalahan")
++			httpx.WriteError(w, http.StatusInternalServerError, "terjadi kesalahan")
+ 			return
+ 		}
+ 		if user.Role != role {
+-			writeError(w, http.StatusForbidden, "akses ditolak")
++			httpx.WriteError(w, http.StatusForbidden, "akses ditolak")
+ 			return
+ 		}
+ 		next.ServeHTTP(w, r)
+diff --git a/internal/adapter/delivery/http/middleware_test.go b/internal/adapter/delivery/http/middleware/auth_test.go
+similarity index 62%
+rename from internal/adapter/delivery/http/middleware_test.go
+rename to internal/adapter/delivery/http/middleware/auth_test.go
+index 3ec0919..ddee492 100644
+--- a/internal/adapter/delivery/http/middleware_test.go
++++ b/internal/adapter/delivery/http/middleware/auth_test.go
+@@ -1,4 +1,4 @@
+-package handler
++package middleware
+ 
+ import (
+ 	"context"
+@@ -10,6 +10,15 @@ import (
+ 	"toko-online/internal/domain"
+ )
+ 
++type fakeUsers struct {
++	user *domain.User
++	err  error
++}
++
++func (f *fakeUsers) Profile(ctx context.Context, id int64) (*domain.User, error) {
++	return f.user, f.err
++}
++
+ func TestRequireRole(t *testing.T) {
+ 	admin := &domain.User{ID: 1, Role: domain.RoleAdmin}
+ 	pembeli := &domain.User{ID: 2, Role: domain.RoleCustomer}
+@@ -17,15 +26,15 @@ func TestRequireRole(t *testing.T) {
+ 	tests := []struct {
+ 		name          string
+ 		adaIDDiCtx    bool
+-		svc           *fakeAuth
++		svc           *fakeUsers
+ 		wantStatus    int
+ 		wantDipanggil bool
+ 	}{
+-		{"admin diizinkan", true, &fakeAuth{user: admin}, http.StatusOK, true},
+-		{"pembeli ditolak", true, &fakeAuth{user: pembeli}, http.StatusForbidden, false},
+-		{"tanpa identitas", false, &fakeAuth{user: admin}, http.StatusUnauthorized, false},
+-		{"akun sudah tidak ada", true, &fakeAuth{err: domain.ErrUserNotFound}, http.StatusUnauthorized, false},
+-		{"database error", true, &fakeAuth{err: errors.New("db mati")}, http.StatusInternalServerError, false},
++		{"admin diizinkan", true, &fakeUsers{user: admin}, http.StatusOK, true},
++		{"pembeli ditolak", true, &fakeUsers{user: pembeli}, http.StatusForbidden, false},
++		{"tanpa identitas", false, &fakeUsers{user: admin}, http.StatusUnauthorized, false},
++		{"akun sudah tidak ada", true, &fakeUsers{err: domain.ErrUserNotFound}, http.StatusUnauthorized, false},
++		{"database error", true, &fakeUsers{err: errors.New("db mati")}, http.StatusInternalServerError, false},
+ 	}
+ 
+ 	for _, tt := range tests {
+diff --git a/internal/adapter/delivery/http/ratelimit.go b/internal/adapter/delivery/http/middleware/ratelimit.go
+similarity index 82%
+rename from internal/adapter/delivery/http/ratelimit.go
+rename to internal/adapter/delivery/http/middleware/ratelimit.go
+index fd31df1..1a978af 100644
+--- a/internal/adapter/delivery/http/ratelimit.go
++++ b/internal/adapter/delivery/http/middleware/ratelimit.go
+@@ -1,14 +1,15 @@
+-package handler
++package middleware
+ 
+ import (
+ 	"context"
+ 	"log/slog"
+ 	"math"
+-	"net"
+ 	"net/http"
+ 	"strconv"
+ 	"sync"
+ 	"time"
++
++	"toko-online/internal/adapter/delivery/http/httpx"
+ )
+ 
+ type bucket struct {
+@@ -86,22 +87,14 @@ func (rl *RateLimiter) StartCleanup(ctx context.Context, setiap, maxIdle time.Du
+ 
+ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
+ 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		ok, tunggu := rl.Allow(clientIP(r))
++		ok, tunggu := rl.Allow(httpx.ClientIP(r))
+ 		if !ok {
+ 			detik := int(math.Ceil(tunggu.Seconds()))
+-			slog.Warn("rate limit menolak permintaan", "ip", clientIP(r), "path", r.URL.Path)
++			slog.Warn("rate limit menolak permintaan", "ip", httpx.ClientIP(r), "path", r.URL.Path)
+ 			w.Header().Set("Retry-After", strconv.Itoa(detik))
+-			writeError(w, http.StatusTooManyRequests, "terlalu banyak percobaan, coba lagi nanti")
++			httpx.WriteError(w, http.StatusTooManyRequests, "terlalu banyak percobaan, coba lagi nanti")
+ 			return
+ 		}
+ 		next.ServeHTTP(w, r)
+ 	})
+ }
+-
+-func clientIP(r *http.Request) string {
+-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+-	if err != nil {
+-		return r.RemoteAddr
+-	}
+-	return host
+-}
+diff --git a/internal/adapter/delivery/http/ratelimit_test.go b/internal/adapter/delivery/http/middleware/ratelimit_test.go
+similarity index 99%
+rename from internal/adapter/delivery/http/ratelimit_test.go
+rename to internal/adapter/delivery/http/middleware/ratelimit_test.go
+index bd69bec..23ea84c 100644
+--- a/internal/adapter/delivery/http/ratelimit_test.go
++++ b/internal/adapter/delivery/http/middleware/ratelimit_test.go
+@@ -1,4 +1,4 @@
+-package handler
++package middleware
+ 
+ import (
+ 	"net/http"
+diff --git a/internal/adapter/delivery/http/order_cancel_handler_test.go b/internal/adapter/delivery/http/order/cancel_test.go
+similarity index 59%
+rename from internal/adapter/delivery/http/order_cancel_handler_test.go
+rename to internal/adapter/delivery/http/order/cancel_test.go
+index 19eed51..cd3fb30 100644
+--- a/internal/adapter/delivery/http/order_cancel_handler_test.go
++++ b/internal/adapter/delivery/http/order/cancel_test.go
+@@ -1,17 +1,16 @@
+-package handler
++package order
+ 
+ import (
+ 	"context"
+ 	"errors"
+ 	"net/http"
+-	"net/http/httptest"
+ 	"strings"
+ 	"testing"
+ 
+ 	"toko-online/internal/domain"
+ )
+ 
+-// Cancel melengkapi tiruan fakeOrders (didefinisikan di order_handler_test.go)
++// Cancel melengkapi tiruan fakeOrders (didefinisikan di order_test.go)
+ // agar memenuhi interface OrderService.
+ func (f *fakeOrders) Cancel(ctx context.Context, userID, orderID int64) (*domain.Order, error) {
+ 	f.dipanggil = true
+@@ -79,56 +78,3 @@ func TestOrderHandler_Cancel(t *testing.T) {
+ 		})
+ 	}
+ }
+-
+-func TestRouter_BatalkanPesanan(t *testing.T) {
+-	pembeli := &domain.User{ID: 7, Role: domain.RoleCustomer}
+-	dibatalkan := &domain.Order{ID: 1, UserID: 7, Status: domain.OrderCancelled, Total: 50000}
+-
+-	tests := []struct {
+-		name          string
+-		method        string
+-		path          string
+-		token         bool
+-		wantStatus    int
+-		wantAllow     string
+-		wantDipanggil bool
+-	}{
+-		{"batal tanpa token", http.MethodPost, "/orders/1/cancel", false, http.StatusUnauthorized, "", false},
+-		{"batal dengan token", http.MethodPost, "/orders/1/cancel", true, http.StatusOK, "", true},
+-
+-		{"GET ke cancel tidak didukung", http.MethodGet, "/orders/1/cancel", true, http.StatusMethodNotAllowed, "POST", false},
+-		{"PUT ke cancel tidak didukung", http.MethodPut, "/orders/1/cancel", true, http.StatusMethodNotAllowed, "POST", false},
+-		{"DELETE ke cancel tidak didukung", http.MethodDelete, "/orders/1/cancel", true, http.StatusMethodNotAllowed, "POST", false},
+-
+-		{"detail tetap bisa dibaca", http.MethodGet, "/orders/1", true, http.StatusOK, "", true},
+-		{"POST ke detail tidak membatalkan apa pun", http.MethodPost, "/orders/1", true, http.StatusMethodNotAllowed, "GET", false},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			svc := &fakeOrders{order: dibatalkan}
+-			router := newTestRouterLengkap(&fakeAuth{user: pembeli}, &fakeProducts{}, svc, fakeParser{id: 7})
+-
+-			req := httptest.NewRequest(tt.method, tt.path, nil)
+-			if tt.token {
+-				req.Header.Set("Authorization", "Bearer token-apa-saja")
+-			}
+-			rec := httptest.NewRecorder()
+-
+-			router.ServeHTTP(rec, req)
+-
+-			if rec.Code != tt.wantStatus {
+-				t.Fatalf("status = %d, ingin %d (body: %s)", rec.Code, tt.wantStatus, rec.Body.String())
+-			}
+-			if got := rec.Result().Header.Get("Allow"); got != tt.wantAllow {
+-				t.Errorf("header Allow = %q, ingin %q", got, tt.wantAllow)
+-			}
+-			if svc.dipanggil != tt.wantDipanggil {
+-				t.Errorf("usecase pesanan dipanggil = %v, ingin %v", svc.dipanggil, tt.wantDipanggil)
+-			}
+-			if svc.dipanggil && svc.gotUserID != 7 {
+-				t.Errorf("userID yang sampai ke usecase = %d, ingin 7 (dari token)", svc.gotUserID)
+-			}
+-		})
+-	}
+-}
+diff --git a/internal/adapter/delivery/http/order_handler.go b/internal/adapter/delivery/http/order/order.go
+similarity index 50%
+rename from internal/adapter/delivery/http/order_handler.go
+rename to internal/adapter/delivery/http/order/order.go
+index 6a94774..613abdf 100644
+--- a/internal/adapter/delivery/http/order_handler.go
++++ b/internal/adapter/delivery/http/order/order.go
+@@ -1,12 +1,13 @@
+-package handler
++package order
+ 
+ import (
+ 	"context"
+ 	"errors"
+ 	"net/http"
+ 	"strconv"
+-	"strings"
+ 
++	"toko-online/internal/adapter/delivery/http/httpx"
++	"toko-online/internal/adapter/delivery/http/middleware"
+ 	"toko-online/internal/domain"
+ )
+ 
+@@ -39,14 +40,14 @@ type orderListResponse struct {
+ }
+ 
+ func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
+-	userID, ok := UserIDFromContext(r.Context())
++	userID, ok := middleware.UserIDFromContext(r.Context())
+ 	if !ok {
+-		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
++		httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
+ 		return
+ 	}
+ 
+ 	var req orderRequest
+-	if !decodeJSON(w, r, &req) {
++	if !httpx.DecodeJSON(w, r, &req) {
+ 		return
+ 	}
+ 
+@@ -58,105 +59,84 @@ func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
+ 	order, err := h.orders.Place(r.Context(), userID, lines)
+ 	if err != nil {
+ 		if errors.Is(err, domain.ErrProductNotFound) {
+-			writeError(w, http.StatusUnprocessableEntity, "salah satu produk dalam pesanan tidak ditemukan")
++			httpx.WriteError(w, http.StatusUnprocessableEntity, "salah satu produk dalam pesanan tidak ditemukan")
+ 			return
+ 		}
+-		writeUsecaseError(w, err)
++		httpx.WriteUsecaseError(w, err)
+ 		return
+ 	}
+ 
+ 	w.Header().Set("Location", "/orders/"+strconv.FormatInt(order.ID, 10))
+-	writeJSON(w, http.StatusCreated, order)
++	httpx.WriteJSON(w, http.StatusCreated, order)
+ }
+ 
+ func (h *OrderHandler) Get(w http.ResponseWriter, r *http.Request) {
+-	userID, ok := UserIDFromContext(r.Context())
++	userID, ok := middleware.UserIDFromContext(r.Context())
+ 	if !ok {
+-		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
++		httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
+ 		return
+ 	}
+ 
+-	orderID, ok := idFromPath(r.URL.Path, "/orders/")
++	orderID, ok := httpx.IDFromPath(r.URL.Path, "/orders/")
+ 	if !ok {
+-		writeError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
++		httpx.WriteError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
+ 		return
+ 	}
+ 
+ 	order, err := h.orders.Get(r.Context(), userID, orderID)
+ 	if err != nil {
+-		writeUsecaseError(w, err)
++		httpx.WriteUsecaseError(w, err)
+ 		return
+ 	}
+-	writeJSON(w, http.StatusOK, order)
++	httpx.WriteJSON(w, http.StatusOK, order)
+ }
+ 
+ func (h *OrderHandler) List(w http.ResponseWriter, r *http.Request) {
+-	userID, ok := UserIDFromContext(r.Context())
++	userID, ok := middleware.UserIDFromContext(r.Context())
+ 	if !ok {
+-		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
++		httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
+ 		return
+ 	}
+ 
+-	limit, err := queryInt(r, "limit")
++	limit, err := httpx.QueryInt(r, "limit")
+ 	if err != nil {
+-		writeError(w, http.StatusBadRequest, "limit harus berupa angka")
++		httpx.WriteError(w, http.StatusBadRequest, "limit harus berupa angka")
+ 		return
+ 	}
+-	offset, err := queryInt(r, "offset")
++	offset, err := httpx.QueryInt(r, "offset")
+ 	if err != nil {
+-		writeError(w, http.StatusBadRequest, "offset harus berupa angka")
++		httpx.WriteError(w, http.StatusBadRequest, "offset harus berupa angka")
+ 		return
+ 	}
+ 
+ 	pesanan, err := h.orders.ListMine(r.Context(), userID, limit, offset)
+ 	if err != nil {
+-		writeUsecaseError(w, err)
++		httpx.WriteUsecaseError(w, err)
+ 		return
+ 	}
+ 	if pesanan == nil {
+ 		pesanan = []domain.Order{}
+ 	}
+-	writeJSON(w, http.StatusOK, orderListResponse{Data: pesanan})
++	httpx.WriteJSON(w, http.StatusOK, orderListResponse{Data: pesanan})
+ }
+ 
+ func (h *OrderHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+-	userID, ok := UserIDFromContext(r.Context())
++	userID, ok := middleware.UserIDFromContext(r.Context())
+ 	if !ok {
+-		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
++		httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
+ 		return
+ 	}
+ 
+-	orderID, ok := idFromPathDenganAkhiran(r.URL.Path, "/orders/", "/cancel")
++	orderID, ok := httpx.IDFromPathDenganAkhiran(r.URL.Path, "/orders/", "/cancel")
+ 	if !ok {
+-		writeError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
++		httpx.WriteError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
+ 		return
+ 	}
+ 
+ 	order, err := h.orders.Cancel(r.Context(), userID, orderID)
+ 	if err != nil {
+-		writeUsecaseError(w, err)
++		httpx.WriteUsecaseError(w, err)
+ 		return
+ 	}
+-	writeJSON(w, http.StatusOK, order)
+-}
+-
+-// idFromPath mengambil ID dari path berbentuk "<prefix><id>" secara ketat:
+-// hanya angka desimal baku ("5" sah; "05", "+5", "5/x", "abc" ditolak).
+-func idFromPath(path, prefix string) (int64, bool) {
+-	raw := strings.TrimPrefix(path, prefix)
+-	if raw == "" || strings.Contains(raw, "/") {
+-		return 0, false
+-	}
+-	id, err := strconv.ParseInt(raw, 10, 64)
+-	if err != nil || id <= 0 || strconv.FormatInt(id, 10) != raw {
+-		return 0, false
+-	}
+-	return id, true
+-}
+-
+-func idFromPathDenganAkhiran(path, prefix, akhiran string) (int64, bool) {
+-	if !strings.HasSuffix(path, akhiran) {
+-		return 0, false
+-	}
+-	return idFromPath(strings.TrimSuffix(path, akhiran), prefix)
++	httpx.WriteJSON(w, http.StatusOK, order)
+ }
+diff --git a/internal/adapter/delivery/http/order_handler_test.go b/internal/adapter/delivery/http/order/order_test.go
+similarity index 98%
+rename from internal/adapter/delivery/http/order_handler_test.go
+rename to internal/adapter/delivery/http/order/order_test.go
+index d111634..cc9a876 100644
+--- a/internal/adapter/delivery/http/order_handler_test.go
++++ b/internal/adapter/delivery/http/order/order_test.go
+@@ -1,4 +1,4 @@
+-package handler
++package order
+ 
+ import (
+ 	"context"
+@@ -9,6 +9,7 @@ import (
+ 	"strings"
+ 	"testing"
+ 
++	"toko-online/internal/adapter/delivery/http/middleware"
+ 	"toko-online/internal/domain"
+ )
+ 
+@@ -52,7 +53,7 @@ func (f *fakeOrders) ListMine(ctx context.Context, userID int64, limit, offset i
+ func kirimSebagai(h http.HandlerFunc, userID int64, method, path, body string) *httptest.ResponseRecorder {
+ 	req := httptest.NewRequest(method, path, strings.NewReader(body))
+ 	if userID != 0 {
+-		req = req.WithContext(context.WithValue(req.Context(), ctxKey{}, userID))
++		req = req.WithContext(middleware.WithUserID(req.Context(), userID))
+ 	}
+ 	rec := httptest.NewRecorder()
+ 	h(rec, req)
+diff --git a/internal/adapter/delivery/http/payment/mock_test.go b/internal/adapter/delivery/http/payment/mock_test.go
+new file mode 100644
+index 0000000..62e03aa
+--- /dev/null
++++ b/internal/adapter/delivery/http/payment/mock_test.go
+@@ -0,0 +1,62 @@
++package payment
++
++import (
++	"context"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++
++	"toko-online/internal/adapter/delivery/http/middleware"
++	"toko-online/internal/domain"
++)
++
++type fakePayments struct {
++	payment *domain.Payment
++	outcome domain.PaymentOutcome
++	err     error
++
++	dipanggil    bool
++	gotUserID    int64
++	gotOrderID   int64
++	gotBody      []byte
++	gotTimestamp string
++	gotSignature string
++}
++
++func (f *fakePayments) Pay(ctx context.Context, userID, orderID int64) (*domain.Payment, error) {
++	f.dipanggil = true
++	f.gotUserID = userID
++	f.gotOrderID = orderID
++	return f.payment, f.err
++}
++
++func (f *fakePayments) HandleWebhook(ctx context.Context, body []byte, timestamp, signature string) (domain.PaymentOutcome, error) {
++	f.dipanggil = true
++	f.gotBody = append([]byte(nil), body...)
++	f.gotTimestamp = timestamp
++	f.gotSignature = signature
++	return f.outcome, f.err
++}
++
++func kirimWebhook(h http.HandlerFunc, body, timestamp, signature string) *httptest.ResponseRecorder {
++	req := httptest.NewRequest(http.MethodPost, "/webhooks/payments", strings.NewReader(body))
++	if timestamp != "" {
++		req.Header.Set(headerWebhookTimestamp, timestamp)
++	}
++	if signature != "" {
++		req.Header.Set(headerWebhookSignature, signature)
++	}
++	rec := httptest.NewRecorder()
++	h(rec, req)
++	return rec
++}
++
++func kirimSebagai(h http.HandlerFunc, userID int64, method, path, body string) *httptest.ResponseRecorder {
++	req := httptest.NewRequest(method, path, strings.NewReader(body))
++	if userID != 0 {
++		req = req.WithContext(middleware.WithUserID(req.Context(), userID))
++	}
++	rec := httptest.NewRecorder()
++	h(rec, req)
++	return rec
++}
+diff --git a/internal/adapter/delivery/http/payment_handler.go b/internal/adapter/delivery/http/payment/payment.go
+similarity index 63%
+rename from internal/adapter/delivery/http/payment_handler.go
+rename to internal/adapter/delivery/http/payment/payment.go
+index b3e7a0f..76fe598 100644
+--- a/internal/adapter/delivery/http/payment_handler.go
++++ b/internal/adapter/delivery/http/payment/payment.go
+@@ -1,4 +1,4 @@
+-package handler
++package payment
+ 
+ import (
+ 	"context"
+@@ -7,6 +7,8 @@ import (
+ 	"log/slog"
+ 	"net/http"
+ 
++	"toko-online/internal/adapter/delivery/http/httpx"
++	"toko-online/internal/adapter/delivery/http/middleware"
+ 	"toko-online/internal/domain"
+ )
+ 
+@@ -34,24 +36,24 @@ type webhookResponse struct {
+ }
+ 
+ func (h *PaymentHandler) Pay(w http.ResponseWriter, r *http.Request) {
+-	userID, ok := UserIDFromContext(r.Context())
++	userID, ok := middleware.UserIDFromContext(r.Context())
+ 	if !ok {
+-		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
++		httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
+ 		return
+ 	}
+ 
+-	orderID, ok := idFromPathDenganAkhiran(r.URL.Path, "/orders/", "/pay")
++	orderID, ok := httpx.IDFromPathDenganAkhiran(r.URL.Path, "/orders/", "/pay")
+ 	if !ok {
+-		writeError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
++		httpx.WriteError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
+ 		return
+ 	}
+ 
+ 	payment, err := h.payments.Pay(r.Context(), userID, orderID)
+ 	if err != nil {
+-		writeUsecaseError(w, err)
++		httpx.WriteUsecaseError(w, err)
+ 		return
+ 	}
+-	writeJSON(w, http.StatusOK, payment)
++	httpx.WriteJSON(w, http.StatusOK, payment)
+ }
+ 
+ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
+@@ -60,10 +62,10 @@ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
+ 	if err != nil {
+ 		var terlaluBesar *http.MaxBytesError
+ 		if errors.As(err, &terlaluBesar) {
+-			writeError(w, http.StatusRequestEntityTooLarge, "body terlalu besar")
++			httpx.WriteError(w, http.StatusRequestEntityTooLarge, "body terlalu besar")
+ 			return
+ 		}
+-		writeError(w, http.StatusBadRequest, "body tidak dapat dibaca")
++		httpx.WriteError(w, http.StatusBadRequest, "body tidak dapat dibaca")
+ 		return
+ 	}
+ 
+@@ -72,9 +74,9 @@ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
+ 
+ 	outcome, err := h.payments.HandleWebhook(r.Context(), body, timestamp, signature)
+ 	if err != nil {
+-		slog.Warn("webhook ditolak", "ip", clientIP(r), "error", err)
+-		writeUsecaseError(w, err)
++		slog.Warn("webhook ditolak", "ip", httpx.ClientIP(r), "error", err)
++		httpx.WriteUsecaseError(w, err)
+ 		return
+ 	}
+-	writeJSON(w, http.StatusOK, webhookResponse{Hasil: string(outcome)})
++	httpx.WriteJSON(w, http.StatusOK, webhookResponse{Hasil: string(outcome)})
+ }
+diff --git a/internal/adapter/delivery/http/payment_handler_test.go b/internal/adapter/delivery/http/payment/payment_test.go
+similarity index 62%
+rename from internal/adapter/delivery/http/payment_handler_test.go
+rename to internal/adapter/delivery/http/payment/payment_test.go
+index d246495..eaf8cce 100644
+--- a/internal/adapter/delivery/http/payment_handler_test.go
++++ b/internal/adapter/delivery/http/payment/payment_test.go
+@@ -1,69 +1,14 @@
+-package handler
++package payment
+ 
+ import (
+-	"context"
+ 	"errors"
+ 	"net/http"
+-	"net/http/httptest"
+ 	"strings"
+ 	"testing"
+ 
+ 	"toko-online/internal/domain"
+ )
+ 
+-type fakePayments struct {
+-	payment *domain.Payment
+-	outcome domain.PaymentOutcome
+-	err     error
+-
+-	dipanggil    bool
+-	gotUserID    int64
+-	gotOrderID   int64
+-	gotBody      []byte
+-	gotTimestamp string
+-	gotSignature string
+-}
+-
+-func (f *fakePayments) Pay(ctx context.Context, userID, orderID int64) (*domain.Payment, error) {
+-	f.dipanggil = true
+-	f.gotUserID = userID
+-	f.gotOrderID = orderID
+-	return f.payment, f.err
+-}
+-
+-func (f *fakePayments) HandleWebhook(ctx context.Context, body []byte, timestamp, signature string) (domain.PaymentOutcome, error) {
+-	f.dipanggil = true
+-	f.gotBody = append([]byte(nil), body...)
+-	f.gotTimestamp = timestamp
+-	f.gotSignature = signature
+-	return f.outcome, f.err
+-}
+-
+-func kirimWebhook(h http.HandlerFunc, body, timestamp, signature string) *httptest.ResponseRecorder {
+-	req := httptest.NewRequest(http.MethodPost, "/webhooks/payments", strings.NewReader(body))
+-	if timestamp != "" {
+-		req.Header.Set(headerWebhookTimestamp, timestamp)
+-	}
+-	if signature != "" {
+-		req.Header.Set(headerWebhookSignature, signature)
+-	}
+-	rec := httptest.NewRecorder()
+-	h(rec, req)
+-	return rec
+-}
+-
+-func newTestRouterBayar(svc *fakeAuth, bayar PaymentService, parser TokenParser) http.Handler {
+-	return NewRouter(Dependencies{
+-		Auth:        NewAuthHandler(svc),
+-		Products:    NewProductHandler(&fakeProducts{}),
+-		Orders:      NewOrderHandler(&fakeOrders{}),
+-		Payments:    NewPaymentHandler(bayar),
+-		Tokens:      parser,
+-		Users:       svc,
+-		AuthLimiter: NewRateLimiter(6000, 1000),
+-	})
+-}
+-
+ func TestPaymentHandler_Pay(t *testing.T) {
+ 	tagihan := &domain.Payment{ID: 1, OrderID: 5, Reference: "SIM-1", Amount: 100000, Status: domain.PaymentPending}
+ 
+@@ -215,55 +160,3 @@ func TestPaymentHandler_Webhook_BodyTerlaluBesar(t *testing.T) {
+ 		t.Error("usecase tidak boleh dipanggil untuk body yang terlalu besar")
+ 	}
+ }
+-
+-func TestRouter_Pembayaran(t *testing.T) {
+-	pembeli := &domain.User{ID: 7, Role: domain.RoleCustomer}
+-	tagihan := &domain.Payment{ID: 1, OrderID: 1, Reference: "SIM-1", Amount: 1000, Status: domain.PaymentPending}
+-
+-	tests := []struct {
+-		name          string
+-		method        string
+-		path          string
+-		token         bool
+-		wantStatus    int
+-		wantAllow     string
+-		wantDipanggil bool
+-	}{
+-		{"bayar tanpa token", http.MethodPost, "/orders/1/pay", false, http.StatusUnauthorized, "", false},
+-		{"bayar dengan token", http.MethodPost, "/orders/1/pay", true, http.StatusOK, "", true},
+-		{"GET ke pay tidak didukung", http.MethodGet, "/orders/1/pay", true, http.StatusMethodNotAllowed, "POST", false},
+-		{"DELETE ke pay tidak didukung", http.MethodDelete, "/orders/1/pay", true, http.StatusMethodNotAllowed, "POST", false},
+-
+-		{"webhook tidak membutuhkan token login", http.MethodPost, "/webhooks/payments", false, http.StatusOK, "", true},
+-		{"GET ke webhook tidak didukung", http.MethodGet, "/webhooks/payments", false, http.StatusMethodNotAllowed, "POST", false},
+-		{"PUT ke webhook tidak didukung", http.MethodPut, "/webhooks/payments", false, http.StatusMethodNotAllowed, "POST", false},
+-	}
+-
+-	for _, tt := range tests {
+-		t.Run(tt.name, func(t *testing.T) {
+-			svc := &fakePayments{payment: tagihan, outcome: domain.OutcomePaid}
+-			router := newTestRouterBayar(&fakeAuth{user: pembeli}, svc, fakeParser{id: 7})
+-
+-			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(`{}`))
+-			if tt.token {
+-				req.Header.Set("Authorization", "Bearer token-apa-saja")
+-			}
+-			rec := httptest.NewRecorder()
+-
+-			router.ServeHTTP(rec, req)
+-
+-			if rec.Code != tt.wantStatus {
+-				t.Fatalf("status = %d, ingin %d (body: %s)", rec.Code, tt.wantStatus, rec.Body.String())
+-			}
+-			if got := rec.Result().Header.Get("Allow"); got != tt.wantAllow {
+-				t.Errorf("header Allow = %q, ingin %q", got, tt.wantAllow)
+-			}
+-			if svc.dipanggil != tt.wantDipanggil {
+-				t.Errorf("usecase pembayaran dipanggil = %v, ingin %v", svc.dipanggil, tt.wantDipanggil)
+-			}
+-			if svc.dipanggil && strings.HasSuffix(tt.path, "/pay") && svc.gotUserID != 7 {
+-				t.Errorf("userID yang sampai ke usecase = %d, ingin 7 (dari token)", svc.gotUserID)
+-			}
+-		})
+-	}
+-}
+diff --git a/internal/adapter/delivery/http/product/mock_test.go b/internal/adapter/delivery/http/product/mock_test.go
+new file mode 100644
+index 0000000..219b3ad
+--- /dev/null
++++ b/internal/adapter/delivery/http/product/mock_test.go
+@@ -0,0 +1,59 @@
++package product
++
++import (
++	"context"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++
++	"toko-online/internal/domain"
++)
++
++type fakeProducts struct {
++	product *domain.Product
++	list    []domain.Product
++	err     error
++
++	dipanggil           bool
++	gotID               int64
++	gotLimit, gotOffset int
++	gotStok             int
++}
++
++func (f *fakeProducts) Create(ctx context.Context, nama, deskripsi string, harga int64, stok int) (*domain.Product, error) {
++	f.dipanggil = true
++	f.gotStok = stok
++	return f.product, f.err
++}
++
++func (f *fakeProducts) Get(ctx context.Context, id int64) (*domain.Product, error) {
++	f.dipanggil = true
++	f.gotID = id
++	return f.product, f.err
++}
++
++func (f *fakeProducts) List(ctx context.Context, limit, offset int) ([]domain.Product, error) {
++	f.dipanggil = true
++	f.gotLimit, f.gotOffset = limit, offset
++	return f.list, f.err
++}
++
++func (f *fakeProducts) Update(ctx context.Context, id int64, nama, deskripsi string, harga int64, stok int) (*domain.Product, error) {
++	f.dipanggil = true
++	f.gotID = id
++	f.gotStok = stok
++	return f.product, f.err
++}
++
++func (f *fakeProducts) Delete(ctx context.Context, id int64) error {
++	f.dipanggil = true
++	f.gotID = id
++	return f.err
++}
++
++func kirim(h http.HandlerFunc, method, path, body string) *httptest.ResponseRecorder {
++	req := httptest.NewRequest(method, path, strings.NewReader(body))
++	rec := httptest.NewRecorder()
++	h(rec, req)
++	return rec
++}
+diff --git a/internal/adapter/delivery/http/product_handler.go b/internal/adapter/delivery/http/product/product.go
+similarity index 70%
+rename from internal/adapter/delivery/http/product_handler.go
+rename to internal/adapter/delivery/http/product/product.go
+index 4f44d57..7219670 100644
+--- a/internal/adapter/delivery/http/product_handler.go
++++ b/internal/adapter/delivery/http/product/product.go
+@@ -1,10 +1,12 @@
+-package handler
++package product
+ 
+ import (
+ 	"context"
+ 	"net/http"
+ 	"strconv"
+ 	"strings"
++
++	"toko-online/internal/adapter/delivery/http/httpx"
+ 	"toko-online/internal/domain"
+ )
+ 
+@@ -36,95 +38,95 @@ type productListResponse struct {
+ }
+ 
+ func (h *ProductHandler) List(w http.ResponseWriter, r *http.Request) {
+-	limit, err := queryInt(r, "limit")
++	limit, err := httpx.QueryInt(r, "limit")
+ 	if err != nil {
+-		writeError(w, http.StatusBadRequest, "limit harus berupa angka")
++		httpx.WriteError(w, http.StatusBadRequest, "limit harus berupa angka")
+ 		return
+ 	}
+-	offset, err := queryInt(r, "offset")
++	offset, err := httpx.QueryInt(r, "offset")
+ 	if err != nil {
+-		writeError(w, http.StatusBadRequest, "offset harus berupa angka")
++		httpx.WriteError(w, http.StatusBadRequest, "offset harus berupa angka")
+ 		return
+ 	}
+ 
+ 	produk, err := h.products.List(r.Context(), limit, offset)
+ 	if err != nil {
+-		writeUsecaseError(w, err)
++		httpx.WriteUsecaseError(w, err)
+ 		return
+ 	}
+ 	if produk == nil {
+ 		produk = []domain.Product{}
+ 	}
+-	writeJSON(w, http.StatusOK, productListResponse{Data: produk})
++	httpx.WriteJSON(w, http.StatusOK, productListResponse{Data: produk})
+ }
+ 
+ func (h *ProductHandler) Get(w http.ResponseWriter, r *http.Request) {
+ 	id, ok := productIDFromPath(r.URL.Path)
+ 	if !ok {
+-		writeError(w, http.StatusNotFound, domain.ErrProductNotFound.Error())
++		httpx.WriteError(w, http.StatusNotFound, domain.ErrProductNotFound.Error())
+ 		return
+ 	}
+ 
+ 	p, err := h.products.Get(r.Context(), id)
+ 	if err != nil {
+-		writeUsecaseError(w, err)
++		httpx.WriteUsecaseError(w, err)
+ 		return
+ 	}
+-	writeJSON(w, http.StatusOK, p)
++	httpx.WriteJSON(w, http.StatusOK, p)
+ }
+ 
+ func (h *ProductHandler) Create(w http.ResponseWriter, r *http.Request) {
+ 	var req productRequest
+-	if !decodeJSON(w, r, &req) {
++	if !httpx.DecodeJSON(w, r, &req) {
+ 		return
+ 	}
+ 	if req.Stok == nil {
+-		writeError(w, http.StatusBadRequest, "field stok wajib diisi")
++		httpx.WriteError(w, http.StatusBadRequest, "field stok wajib diisi")
+ 		return
+ 	}
+ 
+ 	p, err := h.products.Create(r.Context(), req.Nama, req.Deskripsi, req.Harga, *req.Stok)
+ 	if err != nil {
+-		writeUsecaseError(w, err)
++		httpx.WriteUsecaseError(w, err)
+ 		return
+ 	}
+ 	w.Header().Set("Location", "/products/"+strconv.FormatInt(p.ID, 10))
+-	writeJSON(w, http.StatusCreated, p)
++	httpx.WriteJSON(w, http.StatusCreated, p)
+ }
+ 
+ func (h *ProductHandler) Update(w http.ResponseWriter, r *http.Request) {
+ 	id, ok := productIDFromPath(r.URL.Path)
+ 	if !ok {
+-		writeError(w, http.StatusNotFound, domain.ErrProductNotFound.Error())
++		httpx.WriteError(w, http.StatusNotFound, domain.ErrProductNotFound.Error())
+ 		return
+ 	}
+ 
+ 	var req productRequest
+-	if !decodeJSON(w, r, &req) {
++	if !httpx.DecodeJSON(w, r, &req) {
+ 		return
+ 	}
+ 	if req.Stok == nil {
+-		writeError(w, http.StatusBadRequest, "field stok wajib diisi")
++		httpx.WriteError(w, http.StatusBadRequest, "field stok wajib diisi")
+ 		return
+ 	}
+ 
+ 	p, err := h.products.Update(r.Context(), id, req.Nama, req.Deskripsi, req.Harga, *req.Stok)
+ 	if err != nil {
+-		writeUsecaseError(w, err)
++		httpx.WriteUsecaseError(w, err)
+ 		return
+ 	}
+-	writeJSON(w, http.StatusOK, p)
++	httpx.WriteJSON(w, http.StatusOK, p)
+ }
+ 
+ func (h *ProductHandler) Delete(w http.ResponseWriter, r *http.Request) {
+ 	id, ok := productIDFromPath(r.URL.Path)
+ 	if !ok {
+-		writeError(w, http.StatusNotFound, domain.ErrProductNotFound.Error())
++		httpx.WriteError(w, http.StatusNotFound, domain.ErrProductNotFound.Error())
+ 		return
+ 	}
+ 
+ 	if err := h.products.Delete(r.Context(), id); err != nil {
+-		writeUsecaseError(w, err)
++		httpx.WriteUsecaseError(w, err)
+ 		return
+ 	}
+ 	w.WriteHeader(http.StatusNoContent)
+@@ -141,11 +143,3 @@ func productIDFromPath(path string) (int64, bool) {
+ 	}
+ 	return id, true
+ }
+-
+-func queryInt(r *http.Request, key string) (int, error) {
+-	raw := r.URL.Query().Get(key)
+-	if raw == "" {
+-		return 0, nil
+-	}
+-	return strconv.Atoi(raw)
+-}
+diff --git a/internal/adapter/delivery/http/product_handler_test.go b/internal/adapter/delivery/http/product/product_test.go
+similarity index 85%
+rename from internal/adapter/delivery/http/product_handler_test.go
+rename to internal/adapter/delivery/http/product/product_test.go
+index f54c511..df4ce97 100644
+--- a/internal/adapter/delivery/http/product_handler_test.go
++++ b/internal/adapter/delivery/http/product/product_test.go
+@@ -1,69 +1,14 @@
+-package handler
++package product
+ 
+ import (
+-	"context"
+ 	"errors"
+ 	"net/http"
+-	"net/http/httptest"
+ 	"strings"
+ 	"testing"
+ 
+ 	"toko-online/internal/domain"
+ )
+ 
+-// ---- tiruan ProductService ----
+-
+-type fakeProducts struct {
+-	product *domain.Product
+-	list    []domain.Product
+-	err     error
+-
+-	dipanggil           bool
+-	gotID               int64
+-	gotLimit, gotOffset int
+-	gotStok             int
+-}
+-
+-func (f *fakeProducts) Create(ctx context.Context, nama, deskripsi string, harga int64, stok int) (*domain.Product, error) {
+-	f.dipanggil = true
+-	f.gotStok = stok
+-	return f.product, f.err
+-}
+-
+-func (f *fakeProducts) Get(ctx context.Context, id int64) (*domain.Product, error) {
+-	f.dipanggil = true
+-	f.gotID = id
+-	return f.product, f.err
+-}
+-
+-func (f *fakeProducts) List(ctx context.Context, limit, offset int) ([]domain.Product, error) {
+-	f.dipanggil = true
+-	f.gotLimit, f.gotOffset = limit, offset
+-	return f.list, f.err
+-}
+-
+-func (f *fakeProducts) Update(ctx context.Context, id int64, nama, deskripsi string, harga int64, stok int) (*domain.Product, error) {
+-	f.dipanggil = true
+-	f.gotID = id
+-	f.gotStok = stok
+-	return f.product, f.err
+-}
+-
+-func (f *fakeProducts) Delete(ctx context.Context, id int64) error {
+-	f.dipanggil = true
+-	f.gotID = id
+-	return f.err
+-}
+-
+-func kirim(h http.HandlerFunc, method, path, body string) *httptest.ResponseRecorder {
+-	req := httptest.NewRequest(method, path, strings.NewReader(body))
+-	rec := httptest.NewRecorder()
+-	h(rec, req)
+-	return rec
+-}
+-
+-// ---- test ----
+-
+ func TestProductHandler_Create(t *testing.T) {
+ 	kopi := &domain.Product{ID: 1, Nama: "Kopi", Harga: 55000, Stok: 10}
+ 	const bodyValid = `{"nama":"Kopi","deskripsi":"Enak","harga":55000,"stok":10}`
+diff --git a/internal/adapter/delivery/http/response.go b/internal/adapter/delivery/http/response.go
+deleted file mode 100644
+index c04583e..0000000
+--- a/internal/adapter/delivery/http/response.go
++++ /dev/null
+@@ -1,49 +0,0 @@
+-package handler
+-
+-import (
+-	"encoding/json"
+-	"errors"
+-	"log/slog"
+-	"net/http"
+-	"strings"
+-)
+-
+-type errorResponse struct {
+-	Error string `json:"error"`
+-}
+-
+-func writeJSON(w http.ResponseWriter, status int, data any) {
+-	w.Header().Set("Content-type", "application/json")
+-	w.WriteHeader(status)
+-
+-	if err := json.NewEncoder(w).Encode(data); err != nil {
+-		slog.Error("response gagal", "error", err)
+-	}
+-}
+-
+-func writeError(w http.ResponseWriter, status int, msg string) {
+-	writeJSON(w, status, errorResponse{Error: msg})
+-}
+-
+-func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+-	r.Body = http.MaxBytesReader(w, r.Body, 1<<14) // 16 KB
+-	dec := json.NewDecoder(r.Body)
+-	dec.DisallowUnknownFields()
+-
+-	if err := dec.Decode(dst); err != nil {
+-		var terlaluBesar *http.MaxBytesError
+-		if errors.As(err, &terlaluBesar) {
+-			writeError(w, http.StatusRequestEntityTooLarge, "body terlalu besar")
+-			return false
+-		}
+-		slog.Info("decode json gagal", "error", err)
+-		writeError(w, http.StatusBadRequest, "body JSON tidak valid")
+-		return false
+-	}
+-	return true
+-}
+-
+-func methodNotAllowed(w http.ResponseWriter, allowed ...string) {
+-	w.Header().Set("Allow", strings.Join(allowed, ", "))
+-	writeError(w, http.StatusMethodNotAllowed, "method tidak diizinkan")
+-}
+diff --git a/internal/adapter/delivery/http/router.go b/internal/adapter/delivery/http/router.go
+index 8254f7c..fd5bd0b 100644
+--- a/internal/adapter/delivery/http/router.go
++++ b/internal/adapter/delivery/http/router.go
+@@ -4,27 +4,33 @@ import (
+ 	"net/http"
+ 	"strings"
+ 
++	"toko-online/internal/adapter/delivery/http/auth"
++	"toko-online/internal/adapter/delivery/http/httpx"
++	"toko-online/internal/adapter/delivery/http/middleware"
++	"toko-online/internal/adapter/delivery/http/order"
++	"toko-online/internal/adapter/delivery/http/payment"
++	"toko-online/internal/adapter/delivery/http/product"
+ 	"toko-online/internal/domain"
+ )
+ 
+ type Dependencies struct {
+-	Auth        *AuthHandler
+-	Products    *ProductHandler
+-	Orders      *OrderHandler
+-	Tokens      TokenParser
+-	Users       UserFinder
+-	AuthLimiter *RateLimiter
+-	Payments    *PaymentHandler
++	Auth        *auth.AuthHandler
++	Products    *product.ProductHandler
++	Orders      *order.OrderHandler
++	Tokens      middleware.TokenParser
++	Users       middleware.UserFinder
++	AuthLimiter *middleware.RateLimiter
++	Payments    *payment.PaymentHandler
+ }
+ 
+ func NewRouter(d Dependencies) http.Handler {
+ 	mux := http.NewServeMux()
+ 
+ 	adminOnly := func(h http.HandlerFunc) http.Handler {
+-		return Authenticate(d.Tokens, RequireRole(d.Users, domain.RoleAdmin, h))
++		return middleware.Authenticate(d.Tokens, middleware.RequireRole(d.Users, domain.RoleAdmin, h))
+ 	}
+ 	loginOnly := func(h http.HandlerFunc) http.Handler {
+-		return Authenticate(d.Tokens, h)
++		return middleware.Authenticate(d.Tokens, h)
+ 	}
+ 
+ 	createProduct := adminOnly(d.Products.Create)
+@@ -40,7 +46,7 @@ func NewRouter(d Dependencies) http.Handler {
+ 	mux.HandleFunc("/health", healthHandler)
+ 	mux.Handle("/auth/register", d.AuthLimiter.Middleware(http.HandlerFunc(d.Auth.Register)))
+ 	mux.Handle("/auth/login", d.AuthLimiter.Middleware(http.HandlerFunc(d.Auth.Login)))
+-	mux.Handle("/me", Authenticate(d.Tokens, http.HandlerFunc(d.Auth.Me)))
++	mux.Handle("/me", middleware.Authenticate(d.Tokens, http.HandlerFunc(d.Auth.Me)))
+ 
+ 	mux.HandleFunc("/products", func(w http.ResponseWriter, r *http.Request) {
+ 		switch r.Method {
+@@ -49,7 +55,7 @@ func NewRouter(d Dependencies) http.Handler {
+ 		case http.MethodPost:
+ 			createProduct.ServeHTTP(w, r)
+ 		default:
+-			methodNotAllowed(w, http.MethodGet, http.MethodPost)
++			httpx.MethodNotAllowed(w, http.MethodGet, http.MethodPost)
+ 		}
+ 	})
+ 
+@@ -62,7 +68,7 @@ func NewRouter(d Dependencies) http.Handler {
+ 		case http.MethodDelete:
+ 			deleteProduct.ServeHTTP(w, r)
+ 		default:
+-			methodNotAllowed(w, http.MethodGet, http.MethodPut, http.MethodDelete)
++			httpx.MethodNotAllowed(w, http.MethodGet, http.MethodPut, http.MethodDelete)
+ 		}
+ 	})
+ 
+@@ -73,7 +79,7 @@ func NewRouter(d Dependencies) http.Handler {
+ 		case http.MethodPost:
+ 			createOrder.ServeHTTP(w, r)
+ 		default:
+-			methodNotAllowed(w, http.MethodGet, http.MethodPost)
++			httpx.MethodNotAllowed(w, http.MethodGet, http.MethodPost)
+ 		}
+ 	})
+ 
+@@ -81,19 +87,19 @@ func NewRouter(d Dependencies) http.Handler {
+ 		switch {
+ 		case strings.HasSuffix(r.URL.Path, "/cancel"):
+ 			if r.Method != http.MethodPost {
+-				methodNotAllowed(w, http.MethodPost)
++				httpx.MethodNotAllowed(w, http.MethodPost)
+ 				return
+ 			}
+ 			cancelOrder.ServeHTTP(w, r)
+ 		case strings.HasSuffix(r.URL.Path, "/pay"):
+ 			if r.Method != http.MethodPost {
+-				methodNotAllowed(w, http.MethodPost)
++				httpx.MethodNotAllowed(w, http.MethodPost)
+ 				return
+ 			}
+ 			payOrder.ServeHTTP(w, r)
+ 		default:
+ 			if r.Method != http.MethodGet {
+-				methodNotAllowed(w, http.MethodGet)
++				httpx.MethodNotAllowed(w, http.MethodGet)
+ 				return
+ 			}
+ 			getOrder.ServeHTTP(w, r)
+@@ -102,7 +108,7 @@ func NewRouter(d Dependencies) http.Handler {
+ 
+ 	mux.HandleFunc("/webhooks/payments", func(w http.ResponseWriter, r *http.Request) {
+ 		if r.Method != http.MethodPost {
+-			methodNotAllowed(w, http.MethodPost)
++			httpx.MethodNotAllowed(w, http.MethodPost)
+ 			return
+ 		}
+ 		d.Payments.Webhook(w, r)
+@@ -113,8 +119,8 @@ func NewRouter(d Dependencies) http.Handler {
+ 
+ func healthHandler(w http.ResponseWriter, r *http.Request) {
+ 	if r.Method != http.MethodGet {
+-		methodNotAllowed(w, http.MethodGet)
++		httpx.MethodNotAllowed(w, http.MethodGet)
+ 		return
+ 	}
+-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
++	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+ }
+diff --git a/internal/adapter/delivery/http/router_order_test.go b/internal/adapter/delivery/http/router_order_test.go
+new file mode 100644
+index 0000000..f0b10c2
+--- /dev/null
++++ b/internal/adapter/delivery/http/router_order_test.go
+@@ -0,0 +1,62 @@
++package handler
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"testing"
++
++	"toko-online/internal/domain"
++)
++
++func TestRouter_BatalkanPesanan(t *testing.T) {
++	pembeli := &domain.User{ID: 7, Role: domain.RoleCustomer}
++	dibatalkan := &domain.Order{ID: 1, UserID: 7, Status: domain.OrderCancelled, Total: 50000}
++
++	tests := []struct {
++		name          string
++		method        string
++		path          string
++		token         bool
++		wantStatus    int
++		wantAllow     string
++		wantDipanggil bool
++	}{
++		{"batal tanpa token", http.MethodPost, "/orders/1/cancel", false, http.StatusUnauthorized, "", false},
++		{"batal dengan token", http.MethodPost, "/orders/1/cancel", true, http.StatusOK, "", true},
++
++		{"GET ke cancel tidak didukung", http.MethodGet, "/orders/1/cancel", true, http.StatusMethodNotAllowed, "POST", false},
++		{"PUT ke cancel tidak didukung", http.MethodPut, "/orders/1/cancel", true, http.StatusMethodNotAllowed, "POST", false},
++		{"DELETE ke cancel tidak didukung", http.MethodDelete, "/orders/1/cancel", true, http.StatusMethodNotAllowed, "POST", false},
++
++		{"detail tetap bisa dibaca", http.MethodGet, "/orders/1", true, http.StatusOK, "", true},
++		{"POST ke detail tidak membatalkan apa pun", http.MethodPost, "/orders/1", true, http.StatusMethodNotAllowed, "GET", false},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			svc := &fakeOrders{order: dibatalkan}
++			router := newTestRouterLengkap(&fakeAuth{user: pembeli}, &fakeProducts{}, svc, fakeParser{id: 7})
++
++			req := httptest.NewRequest(tt.method, tt.path, nil)
++			if tt.token {
++				req.Header.Set("Authorization", "Bearer token-apa-saja")
++			}
++			rec := httptest.NewRecorder()
++
++			router.ServeHTTP(rec, req)
++
++			if rec.Code != tt.wantStatus {
++				t.Fatalf("status = %d, ingin %d (body: %s)", rec.Code, tt.wantStatus, rec.Body.String())
++			}
++			if got := rec.Result().Header.Get("Allow"); got != tt.wantAllow {
++				t.Errorf("header Allow = %q, ingin %q", got, tt.wantAllow)
++			}
++			if svc.dipanggil != tt.wantDipanggil {
++				t.Errorf("usecase pesanan dipanggil = %v, ingin %v", svc.dipanggil, tt.wantDipanggil)
++			}
++			if svc.dipanggil && svc.gotUserID != 7 {
++				t.Errorf("userID yang sampai ke usecase = %d, ingin 7 (dari token)", svc.gotUserID)
++			}
++		})
++	}
++}
+diff --git a/internal/adapter/delivery/http/router_payment_test.go b/internal/adapter/delivery/http/router_payment_test.go
+new file mode 100644
+index 0000000..56c15d0
+--- /dev/null
++++ b/internal/adapter/delivery/http/router_payment_test.go
+@@ -0,0 +1,76 @@
++package handler
++
++import (
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"toko-online/internal/adapter/delivery/http/middleware"
++	"toko-online/internal/adapter/delivery/http/payment"
++	"toko-online/internal/domain"
++)
++
++func newTestRouterBayar(svc *fakeAuth, bayar payment.PaymentService, parser middleware.TokenParser) http.Handler {
++	return NewRouter(Dependencies{
++		Auth:        NewAuthHandler(svc),
++		Products:    NewProductHandler(&fakeProducts{}),
++		Orders:      NewOrderHandler(&fakeOrders{}),
++		Payments:    NewPaymentHandler(bayar),
++		Tokens:      parser,
++		Users:       svc,
++		AuthLimiter: NewRateLimiter(6000, 1000),
++	})
++}
++
++func TestRouter_Pembayaran(t *testing.T) {
++	pembeli := &domain.User{ID: 7, Role: domain.RoleCustomer}
++	tagihan := &domain.Payment{ID: 1, OrderID: 1, Reference: "SIM-1", Amount: 1000, Status: domain.PaymentPending}
++
++	tests := []struct {
++		name          string
++		method        string
++		path          string
++		token         bool
++		wantStatus    int
++		wantAllow     string
++		wantDipanggil bool
++	}{
++		{"bayar tanpa token", http.MethodPost, "/orders/1/pay", false, http.StatusUnauthorized, "", false},
++		{"bayar dengan token", http.MethodPost, "/orders/1/pay", true, http.StatusOK, "", true},
++		{"GET ke pay tidak didukung", http.MethodGet, "/orders/1/pay", true, http.StatusMethodNotAllowed, "POST", false},
++		{"DELETE ke pay tidak didukung", http.MethodDelete, "/orders/1/pay", true, http.StatusMethodNotAllowed, "POST", false},
++
++		{"webhook tidak membutuhkan token login", http.MethodPost, "/webhooks/payments", false, http.StatusOK, "", true},
++		{"GET ke webhook tidak didukung", http.MethodGet, "/webhooks/payments", false, http.StatusMethodNotAllowed, "POST", false},
++		{"PUT ke webhook tidak didukung", http.MethodPut, "/webhooks/payments", false, http.StatusMethodNotAllowed, "POST", false},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			svc := &fakePayments{payment: tagihan, outcome: domain.OutcomePaid}
++			router := newTestRouterBayar(&fakeAuth{user: pembeli}, svc, fakeParser{id: 7})
++
++			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(`{}`))
++			if tt.token {
++				req.Header.Set("Authorization", "Bearer token-apa-saja")
++			}
++			rec := httptest.NewRecorder()
++
++			router.ServeHTTP(rec, req)
++
++			if rec.Code != tt.wantStatus {
++				t.Fatalf("status = %d, ingin %d (body: %s)", rec.Code, tt.wantStatus, rec.Body.String())
++			}
++			if got := rec.Result().Header.Get("Allow"); got != tt.wantAllow {
++				t.Errorf("header Allow = %q, ingin %q", got, tt.wantAllow)
++			}
++			if svc.dipanggil != tt.wantDipanggil {
++				t.Errorf("usecase pembayaran dipanggil = %v, ingin %v", svc.dipanggil, tt.wantDipanggil)
++			}
++			if svc.dipanggil && strings.HasSuffix(tt.path, "/pay") && svc.gotUserID != 7 {
++				t.Errorf("userID yang sampai ke usecase = %d, ingin 7 (dari token)", svc.gotUserID)
++			}
++		})
++	}
++}
+diff --git a/internal/adapter/delivery/http/router_test.go b/internal/adapter/delivery/http/router_test.go
+index d3475f9..62ef73a 100644
+--- a/internal/adapter/delivery/http/router_test.go
++++ b/internal/adapter/delivery/http/router_test.go
+@@ -6,6 +6,9 @@ import (
+ 	"strings"
+ 	"testing"
+ 
++	"toko-online/internal/adapter/delivery/http/middleware"
++	"toko-online/internal/adapter/delivery/http/order"
++	"toko-online/internal/adapter/delivery/http/product"
+ 	"toko-online/internal/domain"
+ )
+ 
+@@ -40,11 +43,11 @@ func TestHealthHandler(t *testing.T) {
+ 		})
+ 	}
+ }
+-func newTestRouter(svc *fakeAuth, produk ProductService, parser TokenParser) http.Handler {
++func newTestRouter(svc *fakeAuth, produk product.ProductService, parser middleware.TokenParser) http.Handler {
+ 	return newTestRouterLengkap(svc, produk, &fakeOrders{}, parser)
+ }
+ 
+-func newTestRouterLengkap(svc *fakeAuth, produk ProductService, pesanan OrderService, parser TokenParser) http.Handler {
++func newTestRouterLengkap(svc *fakeAuth, produk product.ProductService, pesanan order.OrderService, parser middleware.TokenParser) http.Handler {
+ 	return NewRouter(Dependencies{
+ 		Auth:        NewAuthHandler(svc),
+ 		Products:    NewProductHandler(produk),

@@ -1,14 +1,15 @@
-package handler
+package middleware
 
 import (
 	"context"
 	"log/slog"
 	"math"
-	"net"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
+
+	"toko-online/internal/adapter/delivery/http/httpx"
 )
 
 type bucket struct {
@@ -86,22 +87,14 @@ func (rl *RateLimiter) StartCleanup(ctx context.Context, setiap, maxIdle time.Du
 
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ok, tunggu := rl.Allow(clientIP(r))
+		ok, tunggu := rl.Allow(httpx.ClientIP(r))
 		if !ok {
 			detik := int(math.Ceil(tunggu.Seconds()))
-			slog.Warn("rate limit menolak permintaan", "ip", clientIP(r), "path", r.URL.Path)
+			slog.Warn("rate limit menolak permintaan", "ip", httpx.ClientIP(r), "path", r.URL.Path)
 			w.Header().Set("Retry-After", strconv.Itoa(detik))
-			writeError(w, http.StatusTooManyRequests, "terlalu banyak percobaan, coba lagi nanti")
+			httpx.WriteError(w, http.StatusTooManyRequests, "terlalu banyak percobaan, coba lagi nanti")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

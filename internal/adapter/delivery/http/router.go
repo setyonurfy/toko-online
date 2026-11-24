@@ -4,27 +4,33 @@ import (
 	"net/http"
 	"strings"
 
+	"toko-online/internal/adapter/delivery/http/auth"
+	"toko-online/internal/adapter/delivery/http/httpx"
+	"toko-online/internal/adapter/delivery/http/middleware"
+	"toko-online/internal/adapter/delivery/http/order"
+	"toko-online/internal/adapter/delivery/http/payment"
+	"toko-online/internal/adapter/delivery/http/product"
 	"toko-online/internal/domain"
 )
 
 type Dependencies struct {
-	Auth        *AuthHandler
-	Products    *ProductHandler
-	Orders      *OrderHandler
-	Tokens      TokenParser
-	Users       UserFinder
-	AuthLimiter *RateLimiter
-	Payments    *PaymentHandler
+	Auth        *auth.AuthHandler
+	Products    *product.ProductHandler
+	Orders      *order.OrderHandler
+	Tokens      middleware.TokenParser
+	Users       middleware.UserFinder
+	AuthLimiter *middleware.RateLimiter
+	Payments    *payment.PaymentHandler
 }
 
 func NewRouter(d Dependencies) http.Handler {
 	mux := http.NewServeMux()
 
 	adminOnly := func(h http.HandlerFunc) http.Handler {
-		return Authenticate(d.Tokens, RequireRole(d.Users, domain.RoleAdmin, h))
+		return middleware.Authenticate(d.Tokens, middleware.RequireRole(d.Users, domain.RoleAdmin, h))
 	}
 	loginOnly := func(h http.HandlerFunc) http.Handler {
-		return Authenticate(d.Tokens, h)
+		return middleware.Authenticate(d.Tokens, h)
 	}
 
 	createProduct := adminOnly(d.Products.Create)
@@ -40,7 +46,7 @@ func NewRouter(d Dependencies) http.Handler {
 	mux.HandleFunc("/health", healthHandler)
 	mux.Handle("/auth/register", d.AuthLimiter.Middleware(http.HandlerFunc(d.Auth.Register)))
 	mux.Handle("/auth/login", d.AuthLimiter.Middleware(http.HandlerFunc(d.Auth.Login)))
-	mux.Handle("/me", Authenticate(d.Tokens, http.HandlerFunc(d.Auth.Me)))
+	mux.Handle("/me", middleware.Authenticate(d.Tokens, http.HandlerFunc(d.Auth.Me)))
 
 	mux.HandleFunc("/products", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -49,7 +55,7 @@ func NewRouter(d Dependencies) http.Handler {
 		case http.MethodPost:
 			createProduct.ServeHTTP(w, r)
 		default:
-			methodNotAllowed(w, http.MethodGet, http.MethodPost)
+			httpx.MethodNotAllowed(w, http.MethodGet, http.MethodPost)
 		}
 	})
 
@@ -62,7 +68,7 @@ func NewRouter(d Dependencies) http.Handler {
 		case http.MethodDelete:
 			deleteProduct.ServeHTTP(w, r)
 		default:
-			methodNotAllowed(w, http.MethodGet, http.MethodPut, http.MethodDelete)
+			httpx.MethodNotAllowed(w, http.MethodGet, http.MethodPut, http.MethodDelete)
 		}
 	})
 
@@ -73,7 +79,7 @@ func NewRouter(d Dependencies) http.Handler {
 		case http.MethodPost:
 			createOrder.ServeHTTP(w, r)
 		default:
-			methodNotAllowed(w, http.MethodGet, http.MethodPost)
+			httpx.MethodNotAllowed(w, http.MethodGet, http.MethodPost)
 		}
 	})
 
@@ -81,19 +87,19 @@ func NewRouter(d Dependencies) http.Handler {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/cancel"):
 			if r.Method != http.MethodPost {
-				methodNotAllowed(w, http.MethodPost)
+				httpx.MethodNotAllowed(w, http.MethodPost)
 				return
 			}
 			cancelOrder.ServeHTTP(w, r)
 		case strings.HasSuffix(r.URL.Path, "/pay"):
 			if r.Method != http.MethodPost {
-				methodNotAllowed(w, http.MethodPost)
+				httpx.MethodNotAllowed(w, http.MethodPost)
 				return
 			}
 			payOrder.ServeHTTP(w, r)
 		default:
 			if r.Method != http.MethodGet {
-				methodNotAllowed(w, http.MethodGet)
+				httpx.MethodNotAllowed(w, http.MethodGet)
 				return
 			}
 			getOrder.ServeHTTP(w, r)
@@ -102,7 +108,7 @@ func NewRouter(d Dependencies) http.Handler {
 
 	mux.HandleFunc("/webhooks/payments", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			methodNotAllowed(w, http.MethodPost)
+			httpx.MethodNotAllowed(w, http.MethodPost)
 			return
 		}
 		d.Payments.Webhook(w, r)
@@ -113,8 +119,8 @@ func NewRouter(d Dependencies) http.Handler {
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		methodNotAllowed(w, http.MethodGet)
+		httpx.MethodNotAllowed(w, http.MethodGet)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

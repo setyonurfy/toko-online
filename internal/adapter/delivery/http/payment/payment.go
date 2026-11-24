@@ -1,4 +1,4 @@
-package handler
+package payment
 
 import (
 	"context"
@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	"toko-online/internal/adapter/delivery/http/httpx"
+	"toko-online/internal/adapter/delivery/http/middleware"
 	"toko-online/internal/domain"
 )
 
@@ -34,24 +36,24 @@ type webhookResponse struct {
 }
 
 func (h *PaymentHandler) Pay(w http.ResponseWriter, r *http.Request) {
-	userID, ok := UserIDFromContext(r.Context())
+	userID, ok := middleware.UserIDFromContext(r.Context())
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "tidak terautentikasi")
+		httpx.WriteError(w, http.StatusUnauthorized, "tidak terautentikasi")
 		return
 	}
 
-	orderID, ok := idFromPathDenganAkhiran(r.URL.Path, "/orders/", "/pay")
+	orderID, ok := httpx.IDFromPathDenganAkhiran(r.URL.Path, "/orders/", "/pay")
 	if !ok {
-		writeError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
+		httpx.WriteError(w, http.StatusNotFound, domain.ErrOrderNotFound.Error())
 		return
 	}
 
 	payment, err := h.payments.Pay(r.Context(), userID, orderID)
 	if err != nil {
-		writeUsecaseError(w, err)
+		httpx.WriteUsecaseError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, payment)
+	httpx.WriteJSON(w, http.StatusOK, payment)
 }
 
 func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
@@ -60,10 +62,10 @@ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var terlaluBesar *http.MaxBytesError
 		if errors.As(err, &terlaluBesar) {
-			writeError(w, http.StatusRequestEntityTooLarge, "body terlalu besar")
+			httpx.WriteError(w, http.StatusRequestEntityTooLarge, "body terlalu besar")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "body tidak dapat dibaca")
+		httpx.WriteError(w, http.StatusBadRequest, "body tidak dapat dibaca")
 		return
 	}
 
@@ -72,9 +74,9 @@ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 
 	outcome, err := h.payments.HandleWebhook(r.Context(), body, timestamp, signature)
 	if err != nil {
-		slog.Warn("webhook ditolak", "ip", clientIP(r), "error", err)
-		writeUsecaseError(w, err)
+		slog.Warn("webhook ditolak", "ip", httpx.ClientIP(r), "error", err)
+		httpx.WriteUsecaseError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, webhookResponse{Hasil: string(outcome)})
+	httpx.WriteJSON(w, http.StatusOK, webhookResponse{Hasil: string(outcome)})
 }

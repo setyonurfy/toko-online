@@ -1,4 +1,4 @@
-package handler
+package middleware
 
 import (
 	"context"
@@ -10,6 +10,15 @@ import (
 	"toko-online/internal/domain"
 )
 
+type fakeUsers struct {
+	user *domain.User
+	err  error
+}
+
+func (f *fakeUsers) Profile(ctx context.Context, id int64) (*domain.User, error) {
+	return f.user, f.err
+}
+
 func TestRequireRole(t *testing.T) {
 	admin := &domain.User{ID: 1, Role: domain.RoleAdmin}
 	pembeli := &domain.User{ID: 2, Role: domain.RoleCustomer}
@@ -17,15 +26,15 @@ func TestRequireRole(t *testing.T) {
 	tests := []struct {
 		name          string
 		adaIDDiCtx    bool
-		svc           *fakeAuth
+		svc           *fakeUsers
 		wantStatus    int
 		wantDipanggil bool
 	}{
-		{"admin diizinkan", true, &fakeAuth{user: admin}, http.StatusOK, true},
-		{"pembeli ditolak", true, &fakeAuth{user: pembeli}, http.StatusForbidden, false},
-		{"tanpa identitas", false, &fakeAuth{user: admin}, http.StatusUnauthorized, false},
-		{"akun sudah tidak ada", true, &fakeAuth{err: domain.ErrUserNotFound}, http.StatusUnauthorized, false},
-		{"database error", true, &fakeAuth{err: errors.New("db mati")}, http.StatusInternalServerError, false},
+		{"admin diizinkan", true, &fakeUsers{user: admin}, http.StatusOK, true},
+		{"pembeli ditolak", true, &fakeUsers{user: pembeli}, http.StatusForbidden, false},
+		{"tanpa identitas", false, &fakeUsers{user: admin}, http.StatusUnauthorized, false},
+		{"akun sudah tidak ada", true, &fakeUsers{err: domain.ErrUserNotFound}, http.StatusUnauthorized, false},
+		{"database error", true, &fakeUsers{err: errors.New("db mati")}, http.StatusInternalServerError, false},
 	}
 
 	for _, tt := range tests {

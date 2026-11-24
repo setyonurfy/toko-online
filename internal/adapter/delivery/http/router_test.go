@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"toko-online/internal/adapter/delivery/http/middleware"
+	"toko-online/internal/adapter/delivery/http/order"
+	"toko-online/internal/adapter/delivery/http/product"
 	"toko-online/internal/domain"
 )
 
@@ -40,11 +43,11 @@ func TestHealthHandler(t *testing.T) {
 		})
 	}
 }
-func newTestRouter(svc *fakeAuth, produk ProductService, parser TokenParser) http.Handler {
+func newTestRouter(svc *fakeAuth, produk product.ProductService, parser middleware.TokenParser) http.Handler {
 	return newTestRouterLengkap(svc, produk, &fakeOrders{}, parser)
 }
 
-func newTestRouterLengkap(svc *fakeAuth, produk ProductService, pesanan OrderService, parser TokenParser) http.Handler {
+func newTestRouterLengkap(svc *fakeAuth, produk product.ProductService, pesanan order.OrderService, parser middleware.TokenParser) http.Handler {
 	return NewRouter(Dependencies{
 		Auth:        NewAuthHandler(svc),
 		Products:    NewProductHandler(produk),
