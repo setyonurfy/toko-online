@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: toko_online_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d toko_online_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_URL_UJI: postgres://postgres:postgres@localhost:5432/toko_online_test?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Periksa format
+        run: |
+          tidak_rapi=$(gofmt -l .)
+          if [ -n "$tidak_rapi" ]; then
+            echo "file berikut belum diformat dengan gofmt:"
+            echo "$tidak_rapi"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Tes unit
+        run: go test -race -count=1 ./...
+
+      - name: Pasang golang-migrate
+        run: go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@v4.15.2
+
+      - name: Migrasi database uji
+        run: sh ./migrate.sh up
+        env:
+          DATABASE_URL: ${{ env.DB_URL_UJI }}
+
+      - name: Tes integrasi
+        run: go test -p 1 -race -count=1 -v ./internal/adapter/repository/postgres/...
+        env:
+          TEST_DATABASE_URL: ${{ env.DB_URL_UJI }}
