@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"log/slog"
-	"math"
 	"net/http"
 	"strconv"
 	"sync"
@@ -89,10 +88,8 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ok, tunggu := rl.Allow(httpx.ClientIP(r))
 		if !ok {
-			detik := int(math.Ceil(tunggu.Seconds()))
 			slog.Warn("rate limit menolak permintaan", "ip", httpx.ClientIP(r), "path", r.URL.Path)
-			w.Header().Set("Retry-After", strconv.Itoa(detik))
-			httpx.WriteError(w, http.StatusTooManyRequests, "terlalu banyak percobaan, coba lagi nanti")
+			httpx.WriteRateLimited(w, tunggu, "terlalu banyak percobaan, coba lagi nanti")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -108,10 +105,8 @@ func (rl *RateLimiter) MiddlewareByUser(next http.Handler) http.Handler {
 		}
 		diizinkan, tunggu := rl.Allow(strconv.FormatInt(id, 10))
 		if !diizinkan {
-			detik := int(math.Ceil(tunggu.Seconds()))
 			slog.Warn("rate limit menolak permintaan pengguna", "user_id", id, "path", r.URL.Path)
-			w.Header().Set("Retry-After", strconv.Itoa(detik))
-			httpx.WriteError(w, http.StatusTooManyRequests, "terlalu banyak permintaan, coba lagi nanti")
+			httpx.WriteRateLimited(w, tunggu, "terlalu banyak permintaan, coba lagi nanti")
 			return
 		}
 		next.ServeHTTP(w, r)

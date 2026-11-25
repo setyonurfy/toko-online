@@ -49,7 +49,7 @@ func newTestRouter(svc *fakeAuth, produk product.ProductService, parser middlewa
 
 func newTestRouterLengkap(svc *fakeAuth, produk product.ProductService, pesanan order.OrderService, parser middleware.TokenParser) http.Handler {
 	return NewRouter(Dependencies{
-		Auth:          NewAuthHandler(svc),
+		Auth:          NewAuthHandler(svc, NewRateLimiter(6000, 1000)),
 		Products:      NewProductHandler(produk),
 		Orders:        NewOrderHandler(pesanan),
 		Tokens:        parser,

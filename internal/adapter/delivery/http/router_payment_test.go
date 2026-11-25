@@ -13,7 +13,7 @@ import (
 
 func newTestRouterBayar(svc *fakeAuth, bayar payment.PaymentService, parser middleware.TokenParser) http.Handler {
 	return NewRouter(Dependencies{
-		Auth:          NewAuthHandler(svc),
+		Auth:          NewAuthHandler(svc, NewRateLimiter(6000, 1000)),
 		Products:      NewProductHandler(&fakeProducts{}),
 		Orders:        NewOrderHandler(&fakeOrders{}),
 		Payments:      NewPaymentHandler(bayar),

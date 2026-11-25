@@ -68,16 +68,18 @@ func run() error {
 	readLimiter := handler.NewRateLimiter(120, 30)
 	actionLimiter := handler.NewRateLimiter(10, 5)
 	adminLimiter := handler.NewRateLimiter(30, 10)
+	loginLimiter := handler.NewRateLimiter(1, 5)
 
 	authLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
 	readLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
 	actionLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
 	adminLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
+	loginLimiter.StartCleanup(ctx, 5*time.Minute, 15*time.Minute)
 
 	userRepo := postgres.NewUserPostgres(db)
 	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
 	authUsecase := usecase.NewAuthUsecase(userRepo, tokens)
-	authHandler := handler.NewAuthHandler(authUsecase)
+	authHandler := handler.NewAuthHandler(authUsecase, loginLimiter)
 
 	productRepo := postgres.NewProductPostgres(db)
 	productUsecase := usecase.NewProductUsecase(productRepo)

@@ -2,7 +2,12 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
 	"toko-online/internal/adapter/delivery/http/httpx"
 	"toko-online/internal/adapter/delivery/http/middleware"
@@ -15,12 +20,22 @@ type AuthService interface {
 	Profile(ctx context.Context, id int64) (*domain.User, error)
 }
 
-type AuthHandler struct {
-	auth AuthService
+type LoginLimiter interface {
+	Allow(key string) (bool, time.Duration)
 }
 
-func NewAuthHandler(auth AuthService) *AuthHandler {
-	return &AuthHandler{auth: auth}
+type AuthHandler struct {
+	auth         AuthService
+	loginLimiter LoginLimiter
+}
+
+func NewAuthHandler(auth AuthService, loginLimiter LoginLimiter) *AuthHandler {
+	return &AuthHandler{auth: auth, loginLimiter: loginLimiter}
+}
+
+func loginKey(ip, email string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
+	return ip + "|" + hex.EncodeToString(sum[:])
 }
 
 type registerRequest struct {
@@ -62,6 +77,14 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	var req loginRequest
 	if !httpx.DecodeJSON(w, r, &req) {
+		return
+	}
+
+	ip := httpx.ClientIP(r)
+	diizinkan, tunggu := h.loginLimiter.Allow(loginKey(ip, req.Email))
+	if !diizinkan {
+		slog.Warn("rate limit menolak percobaan login", "ip", ip)
+		httpx.WriteRateLimited(w, tunggu, "terlalu banyak percobaan, coba lagi nanti")
 		return
 	}
 

@@ -22,7 +22,7 @@ func (f fakeParserMap) Parse(token string) (int64, error) {
 
 func newTestRouterBatas(svc *fakeAuth, read, action, admin *middleware.RateLimiter) http.Handler {
 	return NewRouter(Dependencies{
-		Auth:          NewAuthHandler(svc),
+		Auth:          NewAuthHandler(svc, NewRateLimiter(6000, 1000)),
 		Products:      NewProductHandler(&fakeProducts{}),
 		Orders:        NewOrderHandler(&fakeOrders{}),
 		Payments:      NewPaymentHandler(&fakePayments{}),

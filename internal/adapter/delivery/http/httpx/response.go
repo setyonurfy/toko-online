@@ -3,8 +3,11 @@ package httpx
 import (
 	"encoding/json"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type errorResponse struct {
@@ -27,4 +30,9 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 func MethodNotAllowed(w http.ResponseWriter, allowed ...string) {
 	w.Header().Set("Allow", strings.Join(allowed, ", "))
 	WriteError(w, http.StatusMethodNotAllowed, "method tidak diizinkan")
+}
+
+func WriteRateLimited(w http.ResponseWriter, tunggu time.Duration, pesan string) {
+	w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(tunggu.Seconds()))))
+	WriteError(w, http.StatusTooManyRequests, pesan)
 }

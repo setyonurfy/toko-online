@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"toko-online/internal/adapter/delivery/http/middleware"
 	"toko-online/internal/domain"
 )
 
@@ -28,6 +30,19 @@ func (f *fakeAuth) Login(ctx context.Context, email, password string) (*domain.L
 func (f *fakeAuth) Profile(ctx context.Context, id int64) (*domain.User, error) {
 	return f.user, f.err
 }
+
+type fakeLimiter struct {
+	diizinkan bool
+	tunggu    time.Duration
+	keys      []string
+}
+
+func (f *fakeLimiter) Allow(key string) (bool, time.Duration) {
+	f.keys = append(f.keys, key)
+	return f.diizinkan, f.tunggu
+}
+
+func limiterBebas() *fakeLimiter { return &fakeLimiter{diizinkan: true} }
 
 func TestRegisterHandler(t *testing.T) {
 	const bodyValid = `{"nama":"jhondoe", "email":"jhondoe@mail.com","password":"pass12345"}`
@@ -50,7 +65,7 @@ func TestRegisterHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.alert, func(t *testing.T) {
-			h := NewAuthHandler(tt.svc)
+			h := NewAuthHandler(tt.svc, limiterBebas())
 			req := httptest.NewRequest(tt.method, "/auth/register", strings.NewReader(tt.body))
 			rec := httptest.NewRecorder()
 
@@ -122,7 +137,7 @@ func TestLoginHandler(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.alert, func(t *testing.T) {
-			h := NewAuthHandler(tt.svc)
+			h := NewAuthHandler(tt.svc, limiterBebas())
 			req := httptest.NewRequest(tt.method, "/auth/login", strings.NewReader(tt.body))
 			rec := httptest.NewRecorder()
 
@@ -150,7 +165,7 @@ func TestLoginHandler(t *testing.T) {
 }
 func TestRegisterHandler_BodyTerlaluBesar(t *testing.T) {
 	body := `{"nama":"` + strings.Repeat("a", 20000) + `"}`
-	h := NewAuthHandler(&fakeAuth{})
+	h := NewAuthHandler(&fakeAuth{}, limiterBebas())
 	req := httptest.NewRequest(http.MethodPost, "/auth/register", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
@@ -162,7 +177,7 @@ func TestRegisterHandler_BodyTerlaluBesar(t *testing.T) {
 }
 
 func TestMeHandler_MethodSalah(t *testing.T) {
-	h := NewAuthHandler(&fakeAuth{})
+	h := NewAuthHandler(&fakeAuth{}, limiterBebas())
 	req := httptest.NewRequest(http.MethodPost, "/me", nil)
 	rec := httptest.NewRecorder()
 
@@ -176,5 +191,63 @@ func TestMeHandler_MethodSalah(t *testing.T) {
 	}
 	if got := rec.Header().Get("Allow"); got != http.MethodGet {
 		t.Errorf("Allow = %q, ingin %q", got, http.MethodGet)
+	}
+}
+
+func TestLoginHandler_BatasPercobaanDitolak(t *testing.T) {
+	limiter := &fakeLimiter{tunggu: 90 * time.Second}
+	h := NewAuthHandler(&fakeAuth{user: &domain.User{ID: 1}}, limiter)
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"email":"budi@mail.com","password":"rahasia123"}`))
+	req.RemoteAddr = "9.9.9.9:1234"
+	rec := httptest.NewRecorder()
+
+	h.Login(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, ingin 429", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "90" {
+		t.Errorf("Retry-After = %q, ingin 90", got)
+	}
+	if !strings.Contains(rec.Body.String(), "terlalu banyak percobaan") {
+		t.Errorf("body = %s, ingin memuat pesan batas percobaan", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "token-palsu") {
+		t.Error("login tidak boleh diproses ketika batas terlampaui")
+	}
+	if len(limiter.keys) != 1 {
+		t.Fatalf("limiter dipanggil %d kali, ingin 1", len(limiter.keys))
+	}
+	if !strings.HasPrefix(limiter.keys[0], "9.9.9.9|") {
+		t.Errorf("kunci = %q, ingin diawali IP klien", limiter.keys[0])
+	}
+	if strings.Contains(limiter.keys[0], "budi") {
+		t.Errorf("kunci = %q, tidak boleh memuat email apa adanya", limiter.keys[0])
+	}
+}
+
+func TestLoginHandler_KunciPerIPDanEmail(t *testing.T) {
+	h := NewAuthHandler(&fakeAuth{user: &domain.User{ID: 1}}, middleware.NewRateLimiter(1, 1))
+
+	kirim := func(remoteAddr, email string) int {
+		body := `{"email":"` + email + `","password":"rahasia123"}`
+		req := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body))
+		req.RemoteAddr = remoteAddr
+		rec := httptest.NewRecorder()
+		h.Login(rec, req)
+		return rec.Code
+	}
+
+	if got := kirim("1.1.1.1:1000", "Budi@Mail.com"); got != http.StatusOK {
+		t.Fatalf("percobaan pertama: status = %d, ingin 200", got)
+	}
+	if got := kirim("1.1.1.1:2000", " budi@mail.com "); got != http.StatusTooManyRequests {
+		t.Errorf("email sama beda huruf dan spasi, IP sama: status = %d, ingin 429", got)
+	}
+	if got := kirim("1.1.1.1:3000", "siti@mail.com"); got != http.StatusOK {
+		t.Errorf("email lain, IP sama: status = %d, ingin 200", got)
+	}
+	if got := kirim("2.2.2.2:1000", "budi@mail.com"); got != http.StatusOK {
+		t.Errorf("email sama, IP lain: status = %d, ingin 200", got)
 	}
 }
